@@ -229,6 +229,9 @@ pub(crate) enum AddCommands {
 
     /// Add qcow2 target
     Qcow2(super::qcow2::Qcow2Args),
+
+    /// Add io-replica target
+    IoReplica(super::io_replica::IoReplicaArgs),
 }
 
 #[derive(Subcommand)]

@@ -21,6 +21,7 @@ mod r#loop;
 mod null;
 mod qcow2;
 mod zoned;
+mod io_replica;
 
 #[derive(Parser)]
 #[command(version)]
@@ -197,6 +198,7 @@ fn ublk_parse_add_args(opt: &args::AddCommands) -> (&'static str, &args::GenAddA
         AddCommands::Null(_opt) => ("null", &_opt.gen_arg),
         AddCommands::Zoned(_opt) => ("zoned", &_opt.gen_arg),
         AddCommands::Qcow2(_opt) => ("qcow2", &_opt.gen_arg),
+        AddCommands::IoReplica(_opt) => ("io-replica", &_opt.gen_arg),
     }
 }
 
@@ -209,6 +211,7 @@ fn ublk_add_worker(opt: args::AddCommands) -> Result<i32, UblkError> {
         AddCommands::Null(opt) => null::ublk_add_null(ctrl, Some(opt)),
         AddCommands::Zoned(opt) => zoned::ublk_add_zoned(ctrl, Some(opt)),
         AddCommands::Qcow2(opt) => qcow2::ublk_add_qcow2(ctrl, Some(opt)),
+        AddCommands::IoReplica(opt) => io_replica::ublk_add_io_replica(ctrl, Some(opt)),
     }
 }
 
