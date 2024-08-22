@@ -2,11 +2,15 @@ use io_uring::{opcode, squeue, types};
 use libublk::io::{UblkDev, UblkIOCtx, UblkQueue};
 use libublk::uring_async::ublk_wait_and_handle_ios;
 use libublk::{ctrl::UblkCtrl, helpers::IoBuf, UblkError, UblkIORes};
-use log::trace;
+use libublk::sys::ublksrv_io_desc;
+use log::{trace, debug};
 use serde::{Deserialize, Serialize};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::collections::HashMap;
+use std::cell::UnsafeCell;
+use crate::pool::{PendingIo, PendingBlocksPool};
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -38,6 +42,24 @@ pub(crate) struct LoopTgt {
     pub back_file: std::fs::File,
     pub direct_io: i32,
     pub async_await: bool,
+}
+
+std::thread_local! {
+    static PENDING_BLOCKS: UnsafeCell<PendingBlocksPool> = UnsafeCell::new(PendingBlocksPool::new(1024*1024));
+}
+
+#[inline]
+fn append_pending(iod: &ublksrv_io_desc) -> bool {
+    PENDING_BLOCKS.with(|pool| unsafe {
+        if (*pool.get()).avail_capacity() >= (iod.nr_sectors << 9) as usize {
+            let pio = PendingIo::from_iodesc(&iod);
+            (*pool.get()).append(pio);
+            debug!("{:?}", *pool.get());
+            return true;
+        }
+        debug!("{:?}", *pool.get());
+        false
+    })
 }
 
 #[inline]
@@ -169,10 +191,20 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
         let user_data = i.user_data();
         let res = i.result();
         let cqe_tag = UblkIOCtx::user_data_to_tag(user_data);
+        let op = UblkIOCtx::user_data_to_op(user_data);
+        debug!("<- target io op: {}, res: {}, tag: {}, qid: {}, tid: {:?}",
+            op, res, cqe_tag, q.get_qid(), std::thread::current().id());
 
         assert!(cqe_tag == tag as u32);
 
         if res != -(libc::EAGAIN) {
+            if op >= 1 && op <= 5 {
+                //UBLK_IO_OP_WRITE | UBLK_IO_OP_WRITE_SAME | UBLK_IO_OP_FLUSH | UBLK_IO_OP_DISCARD | UBLK_IO_OP_WRITE_ZEROES ->
+                let res = append_pending(&iod);
+                if res == false {
+                    debug!("pending blocks full");
+                }
+            }
             q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(res)));
             return;
         }
@@ -180,6 +212,7 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
 
     let res = __lo_prep_submit_io_cmd(iod);
     if res < 0 {
+        debug!("-- complete io due to res: {}", res);
         q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(res)));
     } else {
         let op = iod.op_flags & 0xff;
@@ -188,6 +221,8 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
         let bytes = iod.nr_sectors << 9;
         let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr).user_data(data);
         q.ublk_submit_sqe_sync(sqe).unwrap();
+        debug!("-> submit target io op: {}, off: {}, bytes: {}, ptr: {:?}", op, off, bytes, buf_addr);
+        debug!("   io desc: {:?}", iod);
     }
 }
 

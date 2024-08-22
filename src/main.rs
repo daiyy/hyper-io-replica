@@ -22,6 +22,7 @@ mod null;
 mod qcow2;
 mod zoned;
 mod io_replica;
+mod pool;
 
 #[derive(Parser)]
 #[command(version)]
