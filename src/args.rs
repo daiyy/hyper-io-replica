@@ -227,9 +227,6 @@ pub(crate) enum AddCommands {
     /// Add zoned target, supported since linux kernel v6.6
     Zoned(super::zoned::ZonedAddArgs),
 
-    /// Add qcow2 target
-    Qcow2(super::qcow2::Qcow2Args),
-
     /// Add io-replica target
     IoReplica(super::io_replica::IoReplicaArgs),
 }
