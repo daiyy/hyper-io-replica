@@ -414,8 +414,6 @@ fn main() {
     let cli = Cli::parse();
 
     env_logger::builder()
-        .format_target(false)
-        .format_timestamp(None)
         .init();
 
     if !Path::new("/dev/ublk-control").exists() {
