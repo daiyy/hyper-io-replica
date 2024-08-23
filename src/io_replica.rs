@@ -9,7 +9,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::collections::HashMap;
-use std::cell::UnsafeCell;
+use std::cell::RefCell;
 use crate::pool::{PendingIo, PendingBlocksPool};
 
 #[derive(clap::Args, Debug)]
@@ -45,19 +45,19 @@ pub(crate) struct LoopTgt {
 }
 
 std::thread_local! {
-    static PENDING_BLOCKS: UnsafeCell<PendingBlocksPool> = UnsafeCell::new(PendingBlocksPool::new(1024*1024));
+    static PENDING_BLOCKS: RefCell<PendingBlocksPool> = panic!("local pending blocks pool is not yet init");
 }
 
 #[inline]
 fn append_pending(iod: &ublksrv_io_desc) -> bool {
-    PENDING_BLOCKS.with(|pool| unsafe {
-        if (*pool.get()).avail_capacity() >= (iod.nr_sectors << 9) as usize {
+    PENDING_BLOCKS.with(|pool| {
+        if pool.borrow().avail_capacity() >= (iod.nr_sectors << 9) as usize {
             let pio = PendingIo::from_iodesc(&iod);
-            (*pool.get()).append(pio);
-            debug!("{:?}", *pool.get());
+            pool.borrow_mut().append(pio);
+            debug!("{:?}", pool.borrow());
             return true;
         }
-        debug!("{:?}", *pool.get());
+        debug!("{:?}", pool.borrow());
         false
     })
 }
@@ -227,6 +227,10 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
 }
 
 fn q_fn(qid: u16, dev: &UblkDev) {
+
+    let pool = PendingBlocksPool::new(1024*1024);
+    PENDING_BLOCKS.set(pool);
+
     let bufs_rc = Rc::new(dev.alloc_queue_io_bufs());
     let bufs = bufs_rc.clone();
     let lo_io_handler = move |q: &UblkQueue, tag: u16, io: &UblkIOCtx| {
