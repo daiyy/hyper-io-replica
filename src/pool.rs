@@ -1,13 +1,20 @@
 use std::fmt;
-use std::io::Result;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
+use smol::channel;
+use log::{info, debug};
 
 pub(crate) struct PendingIo {
     flags: u32,
     size: u32,
     offset: u64,
     data: IoBuf<u8>,
+}
+
+impl fmt::Debug for PendingIo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PendingIo {{ flags: {}, offset: {}, size: {} }}", self.flags, self.offset, self.size)
+    }
 }
 
 impl PendingIo {
@@ -31,26 +38,32 @@ impl PendingIo {
     }
 }
 
-pub(crate) struct PendingBlocksPool {
+pub(crate) struct LocalPendingBlocksPool {
     blocks: Vec<PendingIo>,
     // size in bytes
     max_capacity: usize,
     current_capacity: usize,
+    tx: channel::Sender<Vec<PendingIo>>,
 }
 
-impl fmt::Debug for PendingBlocksPool {
+impl fmt::Debug for LocalPendingBlocksPool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PendingBlocksPool {{ blocks: {}, available capacity: {} }}", self.blocks.len(), self.avail_capacity())
+        write!(f, "LocalPendingBlocksPool {{ blocks: {}, available capacity: {} }}", self.blocks.len(), self.avail_capacity())
     }
 }
 
-impl PendingBlocksPool {
-    pub(crate) fn new(max_capacity: usize) -> Self {
+impl LocalPendingBlocksPool {
+    pub(crate) fn new(max_capacity: usize, tx: channel::Sender<Vec<PendingIo>>) -> Self {
         Self {
             blocks: Vec::new(),
             max_capacity: max_capacity,
             current_capacity: 0,
+            tx: tx,
         }
+    }
+
+    pub(crate) fn get_count(&self) -> usize {
+        self.blocks.len()
     }
 
     pub(crate) fn avail_capacity(&self) -> usize {
@@ -61,22 +74,52 @@ impl PendingBlocksPool {
     }
 
     pub(crate) fn append(&mut self, pio: PendingIo) {
-        self.current_capacity += pio.size();
         self.blocks.push(pio);
     }
 
-    // flush dirty blocks to hyper
-    pub fn flush_hyper(&mut self) -> Vec<PendingIo> {
-        // sort
-        // merge
-        // output
-        return Vec::new();
+    // push pending io from local to central
+    pub(crate) fn propagate(&mut self) {
+        if self.blocks.len() == 0 {
+            return;
+        }
+        let mut v = Vec::new();
+        std::mem::swap(&mut v, &mut self.blocks);
+        let _ = self.tx.send_blocking(v);
+        self.current_capacity = 0;
+    }
+}
+
+pub(crate) struct TgtPendingBlocksPool {
+    rx: channel::Receiver<Vec<PendingIo>>,
+    tx: channel::Sender<Vec<PendingIo>>,
+}
+
+impl TgtPendingBlocksPool {
+    pub(crate) fn new() -> Self {
+        let (tx, rx) = channel::unbounded();
+        Self {
+            rx: rx,
+            tx: tx,
+        }
     }
 
-    // flush checkpoint to primary
-    pub fn flush_checkpoint(&mut self, cno: u64) {
-        // collect dirty
-        // Serialization
-        // write to superblock on primary
+    pub(crate) fn get_tx_chan(&self) -> channel::Sender<Vec<PendingIo>> {
+        self.tx.clone()
+    }
+
+    pub(crate) async fn main_loop(self) {
+        info!("TgtPendingBlocksPool started");
+        while let Ok(v) = self.rx.recv().await {
+            debug!("TgtPendingBlocksPool receved {} size of pending io vec", v.len());
+        }
+        info!("TgtPendingBlocksPool quit");
+    }
+
+    pub(crate) fn start(self) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(|| {
+            smol::block_on(async move {
+                self.main_loop().await;
+            });
+        })
     }
 }

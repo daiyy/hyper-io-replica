@@ -3,14 +3,15 @@ use libublk::io::{UblkDev, UblkIOCtx, UblkQueue};
 use libublk::uring_async::ublk_wait_and_handle_ios;
 use libublk::{ctrl::UblkCtrl, helpers::IoBuf, UblkError, UblkIORes};
 use libublk::sys::ublksrv_io_desc;
+use libublk::uring_async::ublk_wake_task;
 use log::{trace, debug};
 use serde::{Deserialize, Serialize};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::collections::HashMap;
 use std::cell::RefCell;
-use crate::pool::{PendingIo, PendingBlocksPool};
+use std::time::Duration;
+use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -45,11 +46,11 @@ pub(crate) struct LoopTgt {
 }
 
 std::thread_local! {
-    static PENDING_BLOCKS: RefCell<PendingBlocksPool> = panic!("local pending blocks pool is not yet init");
+    static PENDING_BLOCKS: RefCell<LocalPendingBlocksPool> = panic!("local pending blocks pool is not yet init");
 }
 
 #[inline]
-fn append_pending(iod: &ublksrv_io_desc) -> bool {
+fn pool_append_pending(iod: &ublksrv_io_desc) -> bool {
     PENDING_BLOCKS.with(|pool| {
         if pool.borrow().avail_capacity() >= (iod.nr_sectors << 9) as usize {
             let pio = PendingIo::from_iodesc(&iod);
@@ -59,6 +60,20 @@ fn append_pending(iod: &ublksrv_io_desc) -> bool {
         }
         debug!("{:?}", pool.borrow());
         false
+    })
+}
+
+#[inline]
+fn pool_get_count() -> usize {
+    PENDING_BLOCKS.with(|pool| {
+        pool.borrow().get_count()
+    })
+}
+
+#[inline]
+fn pool_propagate() {
+    PENDING_BLOCKS.with(|pool| {
+        pool.borrow_mut().propagate()
     })
 }
 
@@ -110,6 +125,20 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
         let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr);
         let res = q.ublk_submit_sqe(sqe).await;
         if res != -(libc::EAGAIN) {
+            match op {
+                libublk::sys::UBLK_IO_OP_WRITE |
+                libublk::sys::UBLK_IO_OP_WRITE_SAME |
+                libublk::sys::UBLK_IO_OP_DISCARD |
+                libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
+                    pool_append_pending(&iod);
+                },
+                libublk::sys::UBLK_IO_OP_FLUSH => {
+                    pool_append_pending(&iod);
+                    pool_propagate();
+                },
+                _ => {
+                },
+            }
             return res;
         }
     }
@@ -200,7 +229,7 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
         if res != -(libc::EAGAIN) {
             if op >= 1 && op <= 5 {
                 //UBLK_IO_OP_WRITE | UBLK_IO_OP_WRITE_SAME | UBLK_IO_OP_FLUSH | UBLK_IO_OP_DISCARD | UBLK_IO_OP_WRITE_ZEROES ->
-                let res = append_pending(&iod);
+                let res = pool_append_pending(&iod);
                 if res == false {
                     debug!("pending blocks full");
                 }
@@ -226,10 +255,75 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
     }
 }
 
-fn q_fn(qid: u16, dev: &UblkDev) {
+fn new_q_fn(qid: u16, dev: &UblkDev) {
+    let depth = dev.dev_info.queue_depth;
+    let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
+    let exe = smol::LocalExecutor::new();
+    let mut f_vec = Vec::new();
 
-    let pool = PendingBlocksPool::new(1024*1024);
-    PENDING_BLOCKS.set(pool);
+    for tag in 0..depth {
+        let q = q_rc.clone();
+
+        f_vec.push(exe.spawn(async move {
+            let buf = IoBuf::<u8>::new(q.dev.dev_info.max_io_buf_bytes as usize);
+            let buf_addr = buf.as_mut_ptr();
+            let mut cmd_op = libublk::sys::UBLK_U_IO_FETCH_REQ;
+            let mut res = 0;
+
+            q.register_io_buf(tag, &buf);
+            loop {
+                let cmd_res = q.submit_io_cmd(tag, cmd_op, buf_addr, res).await;
+                if cmd_res == libublk::sys::UBLK_IO_RES_ABORT {
+                    break;
+                }
+
+                res = lo_handle_io_cmd_async(&q, tag, buf_addr).await;
+                cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
+            }
+        }));
+    }
+
+    f_vec.push(exe.spawn(async move {
+        // task to propagate thread local cache once per second
+        loop {
+            smol::Timer::after(Duration::from_secs(1)).await;
+            let pool_count = pool_get_count();
+            if pool_count == 0 {
+                continue;
+            }
+            pool_propagate();
+        }
+    }));
+
+    // expand code of ublk_wait_and_handle_ios(&exe, &q_rc);
+    // this is main loop of queue
+    loop {
+        while exe.try_tick() {}
+        let to_wait = if pool_get_count() > 0 {
+            // local pool is not empty, let's keep on executor tick
+            0
+        } else {
+            // local pool is empty, so we set to_wait to 1 for blocking
+            // currently max wait time is drive by UBLK_QUEUE_IDLE_SECS = 20
+            1
+        };
+        if q_rc.flush_and_wake_io_tasks(|data, cqe, _| ublk_wake_task(data, cqe), to_wait)
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // clean up buf
+    for tag in 0..q_rc.get_depth() as u16 {
+        q_rc.unregister_io_buf(tag);
+    }
+
+    smol::block_on(async { futures::future::join_all(f_vec).await });
+}
+
+#[allow(dead_code)]
+fn q_fn(qid: u16, dev: &UblkDev) {
 
     let bufs_rc = Rc::new(dev.alloc_queue_io_bufs());
     let bufs = bufs_rc.clone();
@@ -334,11 +428,24 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         return Err(UblkError::OtherError(-libc::EINVAL));
     }
 
+    let tgt = TgtPendingBlocksPool::new();
+    let tx = tgt.get_tx_chan();
+    let main = tgt.start();
+
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
-        move |qid, dev: &_| if aa { q_a_fn(qid, dev) } else { q_fn(qid, dev) },
+        move |qid, dev: &_| if aa {
+            q_a_fn(qid, dev)
+        } else {
+            // setup thread local pending blocks pool
+            let pool = LocalPendingBlocksPool::new(1024*1024, tx);
+            PENDING_BLOCKS.set(pool);
+            new_q_fn(qid, dev)
+        },
         move |ctrl: &UblkCtrl| crate::rublk_prep_dump_dev(_shm, fg, ctrl),
     )
     .unwrap();
+
+    let _ = main.join().expect("Couldn't join main thread");
     Ok(0)
 }
