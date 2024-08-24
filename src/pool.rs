@@ -78,6 +78,11 @@ impl LocalPendingBlocksPool {
     }
 
     // push pending io from local to central
+    //
+    // in 3 cases:
+    // 1. no enough avail mem in local pool
+    // 2. 1s timeout
+    // 3. a flush op completed
     pub(crate) fn propagate(&mut self) {
         if self.blocks.len() == 0 {
             return;

@@ -50,16 +50,22 @@ std::thread_local! {
 }
 
 #[inline]
-fn pool_append_pending(iod: &ublksrv_io_desc) -> bool {
+fn pool_append_pending(iod: &ublksrv_io_desc, force_propgate: bool) {
     PENDING_BLOCKS.with(|pool| {
+
+        // copy to pio and append to local pool
+        let pio = PendingIo::from_iodesc(&iod);
+        pool.borrow_mut().append(pio);
+
+        // if we have avail mem in local pool
         if pool.borrow().avail_capacity() >= (iod.nr_sectors << 9) as usize {
-            let pio = PendingIo::from_iodesc(&iod);
-            pool.borrow_mut().append(pio);
-            debug!("{:?}", pool.borrow());
-            return true;
+            if force_propgate {
+                pool.borrow_mut().propagate();
+            }
+            return;
         }
-        debug!("{:?}", pool.borrow());
-        false
+        // if no enough avail mem, force propagate
+        pool.borrow_mut().propagate();
     })
 }
 
@@ -130,11 +136,10 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
                 libublk::sys::UBLK_IO_OP_WRITE_SAME |
                 libublk::sys::UBLK_IO_OP_DISCARD |
                 libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
-                    pool_append_pending(&iod);
+                    pool_append_pending(&iod, false);
                 },
                 libublk::sys::UBLK_IO_OP_FLUSH => {
-                    pool_append_pending(&iod);
-                    pool_propagate();
+                    pool_append_pending(&iod, true);
                 },
                 _ => {
                 },
@@ -229,10 +234,7 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
         if res != -(libc::EAGAIN) {
             if op >= 1 && op <= 5 {
                 //UBLK_IO_OP_WRITE | UBLK_IO_OP_WRITE_SAME | UBLK_IO_OP_FLUSH | UBLK_IO_OP_DISCARD | UBLK_IO_OP_WRITE_ZEROES ->
-                let res = pool_append_pending(&iod);
-                if res == false {
-                    debug!("pending blocks full");
-                }
+                pool_append_pending(&iod, true);
             }
             q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(res)));
             return;
