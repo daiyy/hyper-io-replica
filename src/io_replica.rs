@@ -12,6 +12,8 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::time::Duration;
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
+use crate::state::{LocalTgtState, GlobalTgtState};
+use crate::state;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -47,6 +49,10 @@ pub(crate) struct LoopTgt {
 
 std::thread_local! {
     static PENDING_BLOCKS: RefCell<LocalPendingBlocksPool> = panic!("local pending blocks pool is not yet init");
+}
+
+std::thread_local! {
+    pub(crate) static LOCAL_STATE: RefCell<LocalTgtState> = panic!("local target state is not yet init");
 }
 
 #[inline]
@@ -136,10 +142,16 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
                 libublk::sys::UBLK_IO_OP_WRITE_SAME |
                 libublk::sys::UBLK_IO_OP_DISCARD |
                 libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
-                    pool_append_pending(&iod, false);
+                    if state::local_state_logging_enabled() {
+                        pool_append_pending(&iod, false);
+                    } else {
+                    }
                 },
                 libublk::sys::UBLK_IO_OP_FLUSH => {
-                    pool_append_pending(&iod, true);
+                    if state::local_state_logging_enabled() {
+                        pool_append_pending(&iod, true);
+                    } else {
+                    }
                 },
                 _ => {
                 },
@@ -314,6 +326,7 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
         {
             break;
         }
+        state::local_state_sync();
     }
 
     // clean up buf
@@ -430,9 +443,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         return Err(UblkError::OtherError(-libc::EINVAL));
     }
 
+    let tgt_state = GlobalTgtState::new();
+    let g_state = tgt_state.state_clone();
+
     let tgt = TgtPendingBlocksPool::new();
     let tx = tgt.get_tx_chan();
-    let main = tgt.start();
+    let main = tgt.start(tgt_state);
 
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
@@ -442,6 +458,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             // setup thread local pending blocks pool
             let pool = LocalPendingBlocksPool::new(1024*1024, tx);
             PENDING_BLOCKS.set(pool);
+
+            // setup thread local state
+            let state = LocalTgtState::new(g_state.clone());
+            LOCAL_STATE.set(state);
             new_q_fn(qid, dev)
         },
         move |ctrl: &UblkCtrl| crate::rublk_prep_dump_dev(_shm, fg, ctrl),

@@ -22,6 +22,7 @@ mod null;
 mod zoned;
 mod io_replica;
 mod pool;
+mod state;
 
 #[derive(Parser)]
 #[command(version)]

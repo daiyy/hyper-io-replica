@@ -3,6 +3,7 @@ use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
 use log::{info, debug};
+use crate::state::GlobalTgtState;
 
 pub(crate) struct PendingIo {
     flags: u32,
@@ -112,18 +113,18 @@ impl TgtPendingBlocksPool {
         self.tx.clone()
     }
 
-    pub(crate) async fn main_loop(self) {
-        info!("TgtPendingBlocksPool started");
+    pub(crate) async fn main_loop(self, state: GlobalTgtState) {
+        info!("TgtPendingBlocksPool started with state {:?}", state);
         while let Ok(v) = self.rx.recv().await {
             debug!("TgtPendingBlocksPool receved {} size of pending io vec", v.len());
         }
         info!("TgtPendingBlocksPool quit");
     }
 
-    pub(crate) fn start(self) -> std::thread::JoinHandle<()> {
+    pub(crate) fn start(self, state: GlobalTgtState) -> std::thread::JoinHandle<()> {
         std::thread::spawn(|| {
             smol::block_on(async move {
-                self.main_loop().await;
+                self.main_loop(state).await;
             });
         })
     }
