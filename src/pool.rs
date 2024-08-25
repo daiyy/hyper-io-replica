@@ -4,6 +4,7 @@ use libublk::helpers::IoBuf;
 use smol::channel;
 use log::{info, debug};
 use crate::state::GlobalTgtState;
+use crate::region::Region;
 
 pub(crate) struct PendingIo {
     flags: u32,
@@ -113,18 +114,36 @@ impl TgtPendingBlocksPool {
         self.tx.clone()
     }
 
-    pub(crate) async fn main_loop(self, state: GlobalTgtState) {
-        info!("TgtPendingBlocksPool started with state {:?}", state);
+    pub(crate) async fn main_loop(self, state: GlobalTgtState, region: Region) {
+        info!("TgtPendingBlocksPool started with:");
+        info!("  - state {:?}", state);
+        info!("  - region {:?}", region);
+        loop {
+            match self.rx.try_recv() {
+                Ok(v) => {
+                    debug!("TgtPendingBlocksPool receved {} size of pending io vec", v.len());
+                    println!("TgtPendingBlocksPool receved {} size of pending io vec", v.len());
+                },
+                Err(channel::TryRecvError::Empty) => {
+                    debug!("TgtPendingBlocksPool region dirty: {}", region.is_dirty());
+                    if region.is_dirty() {
+                        debug!("TgtPendingBlocksPool region dirty: {}", region.is_dirty());
+                    }
+                },
+                _ => {
+                    break;
+                },
+            }
+        }
         while let Ok(v) = self.rx.recv().await {
-            debug!("TgtPendingBlocksPool receved {} size of pending io vec", v.len());
         }
         info!("TgtPendingBlocksPool quit");
     }
 
-    pub(crate) fn start(self, state: GlobalTgtState) -> std::thread::JoinHandle<()> {
+    pub(crate) fn start(self, state: GlobalTgtState, region: Region) -> std::thread::JoinHandle<()> {
         std::thread::spawn(|| {
             smol::block_on(async move {
-                self.main_loop(state).await;
+                self.main_loop(state, region).await;
             });
         })
     }

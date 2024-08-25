@@ -61,6 +61,10 @@ std::thread_local! {
     pub(crate) static LOCAL_DIRTY_REGION: RefCell<HashSet<u64>> = panic!("local dirty region set is not yet init");
 }
 
+std::thread_local! {
+    pub(crate) static LOCAL_REGION_MAP: RefCell<region::Region> = panic!("local incar of global region map is not yet init");
+}
+
 #[inline]
 fn pool_append_pending(iod: &ublksrv_io_desc, force_propgate: bool) {
     PENDING_BLOCKS.with(|pool| {
@@ -329,13 +333,13 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
             // currently max wait time is drive by UBLK_QUEUE_IDLE_SECS = 20
             1
         };
+        region::local_region_map_sync(region::local_region_take());
+        state::local_state_sync();
         if q_rc.flush_and_wake_io_tasks(|data, cqe, _| ublk_wake_task(data, cqe), to_wait)
             .is_err()
         {
             break;
         }
-        let dirty_id = region::local_region_take();
-        state::local_state_sync();
     }
 
     // clean up buf
@@ -455,9 +459,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let tgt_state = GlobalTgtState::new();
     let g_state = tgt_state.state_clone();
 
+    let (back_file_size, _, _) = crate::ublk_file_size(&lo.back_file).unwrap();
+    let g_region = region::Region::new(back_file_size, region::DEFAULT_REGION_SIZE);
+
     let tgt = TgtPendingBlocksPool::new();
     let tx = tgt.get_tx_chan();
-    let main = tgt.start(tgt_state);
+    let main = tgt.start(tgt_state, g_region.clone());
 
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
@@ -475,6 +482,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             // setup thread local dirty region set
             let region_set = HashSet::new();
             LOCAL_DIRTY_REGION.set(region_set);
+
+            // setup thread local incar of global region bitmap
+            LOCAL_REGION_MAP.set(g_region.clone());
 
             new_q_fn(qid, dev)
         },

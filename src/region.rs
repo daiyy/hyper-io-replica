@@ -3,18 +3,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::collections::HashSet;
 use libublk::sys::ublksrv_io_desc;
-use crate::io_replica::LOCAL_DIRTY_REGION;
+use crate::io_replica::{LOCAL_DIRTY_REGION, LOCAL_REGION_MAP};
 
-pub const DEFAULT_REGION_SIZE: usize = 8_388_608;
+pub const DEFAULT_REGION_SIZE: u64 = 8_388_608;
 pub const DEFAULT_REGION_SHIFT: u32 = 23;
 
+#[derive(Clone)]
 pub struct Region {
     bitmap: Vec<Arc<AtomicU64>>,
     dirty: Arc<AtomicBool>,
-    region_size: usize,
+    region_size: u64,
     region_shift: u32,
-    dev_size: usize,
-    nr_regions: usize,
+    dev_size: u64,
+    nr_regions: u64,
 }
 
 impl fmt::Debug for Region {
@@ -27,7 +28,7 @@ impl fmt::Debug for Region {
 }
 
 impl Region {
-    pub fn new(dev_size: usize, region_size: usize) -> Self {
+    pub fn new(dev_size: u64, region_size: u64) -> Self {
         // check region size aligned to sector size
         let checked_region_size = region_size >> 9 << 9;
         let region_shift = checked_region_size.ilog2();
@@ -46,6 +47,10 @@ impl Region {
             nr_regions: nr_regions,
             dev_size: dev_size,
         }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::SeqCst)
     }
 
     // convert to region id
@@ -92,6 +97,10 @@ impl Region {
 
     pub fn mark_dirty(&self, start: u64, size: u64) {
         let region_id = self.region_id(start, size);
+        self.mark_dirty_region_id(region_id);
+    }
+
+    pub fn mark_dirty_region_id(&self, region_id: u64 ) {
         let (vec_idx, bit_idx) = self.region_id_to_idx(region_id);
 
         let bits = self.bitmap[vec_idx].clone();
@@ -106,6 +115,10 @@ impl Region {
 
     pub fn clear_dirty(&self, start: u64, size: u64) {
         let region_id = self.region_id(start, size);
+        self.clear_dirty_region_id(region_id);
+    }
+
+    pub fn clear_dirty_region_id(&self, region_id: u64) {
         let (vec_idx, bit_idx) = self.region_id_to_idx(region_id);
 
         let bits = self.bitmap[vec_idx].clone();
@@ -132,6 +145,15 @@ pub(crate) fn local_region_take() -> Vec<u64> {
             .collect();
         *set.borrow_mut() = HashSet::new();
         v
+    })
+}
+
+#[inline]
+pub(crate) fn local_region_map_sync(dirty_region_ids: Vec<u64>) {
+    LOCAL_REGION_MAP.with(|map| {
+        for region_id in dirty_region_ids {
+            map.borrow().mark_dirty_region_id(region_id);
+        }
     })
 }
 
