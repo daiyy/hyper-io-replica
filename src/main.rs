@@ -23,6 +23,7 @@ mod zoned;
 mod io_replica;
 mod pool;
 mod state;
+mod region;
 
 #[derive(Parser)]
 #[command(version)]

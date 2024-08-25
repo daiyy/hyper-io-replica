@@ -11,9 +11,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::time::Duration;
+use std::collections::HashSet;
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 use crate::state::{LocalTgtState, GlobalTgtState};
 use crate::state;
+use crate::region;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -53,6 +55,10 @@ std::thread_local! {
 
 std::thread_local! {
     pub(crate) static LOCAL_STATE: RefCell<LocalTgtState> = panic!("local target state is not yet init");
+}
+
+std::thread_local! {
+    pub(crate) static LOCAL_DIRTY_REGION: RefCell<HashSet<u64>> = panic!("local dirty region set is not yet init");
 }
 
 #[inline]
@@ -145,12 +151,14 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
                     if state::local_state_logging_enabled() {
                         pool_append_pending(&iod, false);
                     } else {
+                        region::local_region_mark_dirty(&iod);
                     }
                 },
                 libublk::sys::UBLK_IO_OP_FLUSH => {
                     if state::local_state_logging_enabled() {
                         pool_append_pending(&iod, true);
                     } else {
+                        region::local_region_mark_dirty(&iod);
                     }
                 },
                 _ => {
@@ -326,6 +334,7 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
         {
             break;
         }
+        let dirty_id = region::local_region_take();
         state::local_state_sync();
     }
 
@@ -462,6 +471,11 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             // setup thread local state
             let state = LocalTgtState::new(g_state.clone());
             LOCAL_STATE.set(state);
+
+            // setup thread local dirty region set
+            let region_set = HashSet::new();
+            LOCAL_DIRTY_REGION.set(region_set);
+
             new_q_fn(qid, dev)
         },
         move |ctrl: &UblkCtrl| crate::rublk_prep_dump_dev(_shm, fg, ctrl),
