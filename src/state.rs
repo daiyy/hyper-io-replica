@@ -4,7 +4,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use crate::io_replica::LOCAL_STATE;
 
-const TGT_STATE_LOGGING_ENABLED: u64 = 0x1;
+const TGT_STATE_LOGGING_ENABLED: u64 = 0b0001;
+const TGT_STATE_RECOVERY_FORWARD_FULL: u64 = 0b0010;
+const TGT_STATE_RECOVERY_FORWARD_PART: u64 = 0b0100;
+const TGT_STATE_RECOVERY_REVERSE_FULL: u64 = 0b1000;
 
 pub(crate) struct LocalTgtState {
     inner: u64,     // local copy of tgt state
@@ -46,6 +49,18 @@ impl LocalTgtState {
     pub(crate) fn is_logging_enabled(&self) -> bool {
         self.inner & TGT_STATE_LOGGING_ENABLED == TGT_STATE_LOGGING_ENABLED
     }
+
+    pub(crate) fn is_recovery_forward_full(&self) -> bool {
+        self.inner & TGT_STATE_RECOVERY_FORWARD_FULL == TGT_STATE_RECOVERY_FORWARD_FULL
+    }
+
+    pub(crate) fn is_recovery_forward_part(&self) -> bool {
+        self.inner & TGT_STATE_RECOVERY_FORWARD_PART == TGT_STATE_RECOVERY_FORWARD_PART
+    }
+
+    pub(crate) fn is_recovery_reverse_full(&self) -> bool {
+        self.inner & TGT_STATE_RECOVERY_REVERSE_FULL == TGT_STATE_RECOVERY_REVERSE_FULL
+    }
 }
 
 pub(crate) struct GlobalTgtState {
@@ -84,5 +99,26 @@ pub(crate) fn local_state_sync() {
 pub(crate) fn local_state_logging_enabled() -> bool {
     LOCAL_STATE.with(|state| {
         state.borrow().is_logging_enabled()
+    })
+}
+
+#[inline]
+pub(crate) fn local_state_recovery_forward_full() -> bool {
+    LOCAL_STATE.with(|state| {
+        state.borrow().is_recovery_forward_full()
+    })
+}
+
+#[inline]
+pub(crate) fn local_state_recovery_forward_part() -> bool {
+    LOCAL_STATE.with(|state| {
+        state.borrow().is_recovery_forward_part()
+    })
+}
+
+#[inline]
+pub(crate) fn local_state_recovery_reverse_full() -> bool {
+    LOCAL_STATE.with(|state| {
+        state.borrow().is_recovery_reverse_full()
     })
 }

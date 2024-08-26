@@ -138,6 +138,16 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
         return res;
     }
 
+    if state::local_state_recovery_forward_part() || state::local_state_recovery_forward_full() {
+        // handle recovery forward
+        todo!();
+    } else if state::local_state_recovery_reverse_full() {
+        // handle recovery reverse
+        todo!();
+    }
+
+    assert!(state::local_state_logging_enabled());
+
     for _ in 0..4 {
         let op = iod.op_flags & 0xff;
         // either start to handle or retry
