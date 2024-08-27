@@ -166,8 +166,6 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
         }
     }
 
-    assert!(state::local_state_logging_enabled());
-
     for _ in 0..4 {
         let op = iod.op_flags & 0xff;
         // either start to handle or retry

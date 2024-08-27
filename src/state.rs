@@ -50,11 +50,13 @@ impl LocalTgtState {
         if self.changed {
             self.upload();
             self.changed = false;
-            self.barrier.wait();
+            // FIXME: can not wait barrier, main loop would be block for 20s
+            //self.barrier.wait();
             return;
         }
         if self.download() {
-            self.barrier.wait();
+            // FIXME: can not wait barrier, main loop would be block for 20s
+            //self.barrier.wait();
         }
     }
 
@@ -97,6 +99,11 @@ impl GlobalTgtState {
 
     pub(crate) fn state_clone(&self) -> Arc<AtomicU64> {
         self.inner.clone()
+    }
+
+    pub(crate) fn set_logging_disable(&self) {
+        let state = !TGT_STATE_LOGGING_ENABLED;
+        self.inner.fetch_and(state, Ordering::SeqCst);
     }
 }
 

@@ -135,6 +135,7 @@ impl TgtPendingBlocksPool {
                         debug!("TgtPendingBlocksPool take out {} bytes of pending io vec len {}", self.pending_bytes, self.pending_queue.len());
                         self.pending_queue = Vec::new();
                         self.pending_bytes = 0;
+                        state.set_logging_disable();
                     }
                 },
                 Err(channel::TryRecvError::Empty) => {
