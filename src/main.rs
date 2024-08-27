@@ -24,6 +24,7 @@ mod io_replica;
 mod pool;
 mod state;
 mod region;
+mod recover;
 
 #[derive(Parser)]
 #[command(version)]
