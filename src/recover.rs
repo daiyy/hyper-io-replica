@@ -36,6 +36,7 @@ impl Default for RecoverCtrl {
 
 impl RecoverCtrl {
     // init ctrl with all region in state NoSync
+    #[allow(dead_code)]
     pub(crate) fn new(nr_regions: usize, mode: u64) -> Self {
         let mut map = HashMap::new();
         for i in 0..nr_regions as u64 {
@@ -50,6 +51,43 @@ impl RecoverCtrl {
             queue: Arc::new(Mutex::new(queue)),
             mode: Arc::new(RwLock::new(mode)),
         }
+    }
+
+    fn init_no_sync(nr_regions: usize) -> (HashMap<u64, Arc<Mutex<Region>>>, VecDeque<(u64, Arc<Mutex<Region>>)>) {
+        let mut map = HashMap::new();
+        for i in 0..nr_regions as u64 {
+            map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::NoSync })));
+        }
+        let mut queue = VecDeque::new();
+        for (region_id, region) in map.iter() {
+            queue.push_back((*region_id, region.clone()));
+        }
+        (map, queue)
+    }
+
+    fn rebuild_mode_full(&self, nr_regions: usize, mode: u64) {
+        let (region_map, queue) = Self::init_no_sync(nr_regions);
+
+        let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
+        *lock = region_map;
+
+        let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
+        *lock = queue;
+
+        let mut lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
+        *lock = mode;
+    }
+
+    pub(crate) fn rebuild_mode_reverse_full(&self, nr_regions: usize) {
+        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_REVERSE_FULL);
+    }
+
+    pub(crate) fn rebuild_mode_forward_full(&self, nr_regions: usize) {
+        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
+    }
+
+    pub(crate) fn rebuild_mode_forward_part(&self) {
+        todo!();
     }
 
     pub(crate) fn mode(&self) -> u64 {
