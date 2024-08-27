@@ -67,6 +67,10 @@ std::thread_local! {
     pub(crate) static LOCAL_REGION_MAP: RefCell<region::Region> = panic!("local incar of global region map is not yet init");
 }
 
+std::thread_local! {
+    pub(crate) static LOCAL_RECOVER_CTRL: RefCell<recover::RecoverCtrl> = panic!("local incar of global recover ctrl is not yet init");
+}
+
 #[inline]
 fn pool_append_pending(iod: &ublksrv_io_desc, force_propgate: bool) {
     PENDING_BLOCKS.with(|pool| {
@@ -140,12 +144,24 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
         return res;
     }
 
-    if state::local_state_recovery_forward_part() || state::local_state_recovery_forward_full() {
-        // handle recovery forward
-        todo!();
-    } else if state::local_state_recovery_reverse_full() {
-        // handle recovery reverse
-        todo!();
+    if state::local_state_recovery_forward_part()
+            || state::local_state_recovery_forward_full()
+            || state::local_state_recovery_reverse_full()
+    {
+        let op = iod.op_flags & 0xff;
+        match op {
+            libublk::sys::UBLK_IO_OP_READ => {
+                recover::local_recover_ctrl_read(&iod).await;
+            },
+            libublk::sys::UBLK_IO_OP_WRITE |
+            libublk::sys::UBLK_IO_OP_WRITE_SAME |
+            libublk::sys::UBLK_IO_OP_DISCARD |
+            libublk::sys::UBLK_IO_OP_WRITE_ZEROES |
+            libublk::sys::UBLK_IO_OP_FLUSH => {
+                recover::local_recover_ctrl_write(&iod).await;
+            },
+            _ => {},
+        }
     }
 
     assert!(state::local_state_logging_enabled());
@@ -474,11 +490,11 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let (back_file_size, _, _) = crate::ublk_file_size(&lo.back_file).unwrap();
     let g_region = region::Region::new(back_file_size, region::DEFAULT_REGION_SIZE);
 
-    let recover_ctrl = recover::RecoverCtrl::default();
+    let g_recover_ctrl = recover::RecoverCtrl::default();
 
     let tgt = TgtPendingBlocksPool::new();
     let tx = tgt.get_tx_chan();
-    let main = tgt.start(tgt_state, g_region.clone(), recover_ctrl);
+    let main = tgt.start(tgt_state, g_region.clone(), g_recover_ctrl.clone());
     let nr_queues = ctrl.dev_info().nr_hw_queues as usize;
     let t_barrier = Arc::new(Barrier::new(nr_queues));
 
@@ -501,6 +517,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
             // setup thread local incar of global region bitmap
             LOCAL_REGION_MAP.set(g_region.clone());
+
+            // setup thread local incar of global recover ctrl
+            LOCAL_RECOVER_CTRL.set(g_recover_ctrl.clone());
 
             new_q_fn(qid, dev)
         },

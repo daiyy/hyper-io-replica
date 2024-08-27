@@ -2,7 +2,10 @@ use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use smol::lock::{Mutex, RwLock};
+use libublk::sys::ublksrv_io_desc;
 use crate::state;
+use crate::region;
+use crate::io_replica::LOCAL_RECOVER_CTRL;
 
 #[derive(PartialEq)]
 pub(crate) enum RecoverState {
@@ -174,4 +177,18 @@ impl RecoverCtrl {
 
     pub(crate) fn do_recovery(&self) {
     }
+}
+
+#[inline]
+pub(crate) async fn local_recover_ctrl_read(iod: &ublksrv_io_desc) {
+    let region_id = region::Region::iod_to_region_id(iod, region::DEFAULT_REGION_SHIFT);
+    let ctrl = LOCAL_RECOVER_CTRL.with_borrow(|x| x.clone());
+    ctrl.q_recover_read(region_id).await;
+}
+
+#[inline]
+pub(crate) async fn local_recover_ctrl_write(iod: &ublksrv_io_desc) {
+    let region_id = region::Region::iod_to_region_id(iod, region::DEFAULT_REGION_SHIFT);
+    let ctrl = LOCAL_RECOVER_CTRL.with_borrow(|x| x.clone());
+    ctrl.q_recover_write(region_id).await;
 }
