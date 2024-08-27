@@ -140,7 +140,6 @@ impl TgtPendingBlocksPool {
                 },
                 Err(channel::TryRecvError::Empty) => {
                     if region.is_dirty() {
-                        debug!("TgtPendingBlocksPool region dirty: {}", region.is_dirty());
                     }
                 },
                 _ => {
