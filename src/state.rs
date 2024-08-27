@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Barrier;
 use crate::io_replica::LOCAL_STATE;
 
 pub(crate) const TGT_STATE_LOGGING_ENABLED: u64 = 0b0001;
@@ -13,21 +14,29 @@ pub(crate) struct LocalTgtState {
     inner: u64,     // local copy of tgt state
     changed: bool,  // if local state changed
     global: Arc<AtomicU64>,
+    barrier: Arc<Barrier>,
 }
 
 impl LocalTgtState {
-    pub(crate) fn new(global: Arc<AtomicU64>) -> Self {
+    pub(crate) fn new(global: Arc<AtomicU64>, barrier: Arc<Barrier>) -> Self {
         Self {
             inner: global.load(Ordering::SeqCst),
             changed: false,
             global: global,
+            barrier: barrier,
         }
     }
 
     // download global state to local
+    // return if or not we need to wait on barrier
     #[inline]
-    fn download(&mut self) {
-        self.inner = self.global.load(Ordering::SeqCst);
+    fn download(&mut self) -> bool {
+        let stat = self.global.load(Ordering::SeqCst);
+        if self.inner != stat {
+            self.inner = stat;
+            return true;
+        }
+        false
     }
 
     // upload local state to global
@@ -41,9 +50,12 @@ impl LocalTgtState {
         if self.changed {
             self.upload();
             self.changed = false;
+            self.barrier.wait();
             return;
         }
-        self.download();
+        if self.download() {
+            self.barrier.wait();
+        }
     }
 
     pub(crate) fn is_logging_enabled(&self) -> bool {

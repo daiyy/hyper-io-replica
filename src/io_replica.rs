@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::time::Duration;
 use std::collections::HashSet;
+use std::sync::{Arc, Barrier};
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 use crate::state::{LocalTgtState, GlobalTgtState};
 use crate::state;
@@ -475,6 +476,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let tgt = TgtPendingBlocksPool::new();
     let tx = tgt.get_tx_chan();
     let main = tgt.start(tgt_state, g_region.clone());
+    let nr_queues = ctrl.dev_info().nr_hw_queues as usize;
+    let t_barrier = Arc::new(Barrier::new(nr_queues));
 
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
@@ -486,7 +489,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             PENDING_BLOCKS.set(pool);
 
             // setup thread local state
-            let state = LocalTgtState::new(g_state.clone());
+            let state = LocalTgtState::new(g_state.clone(), t_barrier.clone());
             LOCAL_STATE.set(state);
 
             // setup thread local dirty region set
