@@ -353,7 +353,7 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
     // this is main loop of queue
     loop {
         while exe.try_tick() {}
-        let to_wait = if pool_get_count() > 0 {
+        let mut to_wait = if pool_get_count() > 0 {
             // local pool is not empty, let's keep on executor tick
             0
         } else {
@@ -362,7 +362,10 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
             1
         };
         region::local_region_map_sync(region::local_region_take());
-        state::local_state_sync();
+        // if state changed or still have inflight io, let keep looping
+        if state::local_state_sync() || q_rc.get_inflight_nr_io() > 0 {
+            to_wait = 0;
+        }
         if q_rc.flush_and_wake_io_tasks(|data, cqe, _| ublk_wake_task(data, cqe), to_wait)
             .is_err()
         {
