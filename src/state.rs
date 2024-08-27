@@ -46,18 +46,22 @@ impl LocalTgtState {
     }
 
     // sync local state with global
-    pub(crate) fn sync(&mut self) {
+    // return:
+    //   - if state changed
+    pub(crate) fn sync(&mut self) -> bool {
         if self.changed {
             self.upload();
             self.changed = false;
             // FIXME: can not wait barrier, main loop would be block for 20s
             //self.barrier.wait();
-            return;
+            return true;
         }
         if self.download() {
             // FIXME: can not wait barrier, main loop would be block for 20s
             //self.barrier.wait();
+            return true;
         }
+        false
     }
 
     pub(crate) fn is_logging_enabled(&self) -> bool {
@@ -108,7 +112,7 @@ impl GlobalTgtState {
 }
 
 #[inline]
-pub(crate) fn local_state_sync() {
+pub(crate) fn local_state_sync() -> bool {
     LOCAL_STATE.with(|state| {
         state.borrow_mut().sync()
     })
