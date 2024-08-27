@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use smol::lock::Mutex;
+use smol::lock::{Mutex, RwLock};
 use crate::state;
 
 #[derive(PartialEq)]
@@ -19,9 +19,19 @@ pub(crate) struct Region {
 
 #[derive(Clone)]
 pub(crate) struct RecoverCtrl {
-    region_map: Arc<RefCell<HashMap<u64, Arc<Mutex<Region>>>>>,
+    region_map: Arc<RwLock<HashMap<u64, Arc<Mutex<Region>>>>>,
     queue: Arc<Mutex<VecDeque<(u64, Arc<Mutex<Region>>)>>>,
-    mode: u64,
+    mode: Arc<RwLock<u64>>,
+}
+
+impl Default for RecoverCtrl {
+    fn default() -> Self {
+        Self {
+            region_map: Arc::new(RwLock::new(HashMap::new())),
+            queue: Arc::new(Mutex::new(VecDeque::new())),
+            mode: Arc::new(RwLock::new(state::TGT_STATE_LOGGING_ENABLED)),
+        }
+    }
 }
 
 impl RecoverCtrl {
@@ -36,19 +46,19 @@ impl RecoverCtrl {
             queue.push_back((*region_id, region.clone()));
         }
         Self {
-            region_map: Arc::new(RefCell::new(map)),
+            region_map: Arc::new(RwLock::new(map)),
             queue: Arc::new(Mutex::new(queue)),
-            mode: mode,
+            mode: Arc::new(RwLock::new(mode)),
         }
     }
 
     pub(crate) fn mode(&self) -> u64 {
-        self.mode
+        *self.mode.read_arc_blocking()
     }
 
     #[inline]
-    fn lookup(&self, region_id: u64) -> Arc<Mutex<Region>> {
-        if let Some(region) = self.region_map.borrow().get(&region_id) {
+    async fn lookup(&self, region_id: u64) -> Arc<Mutex<Region>> {
+        if let Some(region) = self.region_map.read_arc().await.get(&region_id) {
             return region.clone();
         }
         panic!("unable to find region {} in region map", region_id);
@@ -79,8 +89,9 @@ impl RecoverCtrl {
 
     // read op run in queue executor context
     pub(crate) async fn q_recover_read(&self, region_id: u64) {
-        if self.mode == state::TGT_STATE_RECOVERY_FORWARD_FULL
-            || self.mode == state::TGT_STATE_RECOVERY_FORWARD_PART
+        let mode = *self.mode.read_arc().await;
+        if mode == state::TGT_STATE_RECOVERY_FORWARD_FULL
+            || mode == state::TGT_STATE_RECOVERY_FORWARD_PART
         {
             // in forward mode, data on primary is updated,
             // no need to wait for read op
@@ -88,7 +99,7 @@ impl RecoverCtrl {
         }
 
         // in reverse recovery mode
-        let r = self.lookup(region_id);
+        let r = self.lookup(region_id).await;
         let region = r.lock().await;
         assert!(region.state != RecoverState::Recovering);
         if region.state == RecoverState::NoSync {
@@ -104,7 +115,7 @@ impl RecoverCtrl {
     // write op run in queue executor context
     pub(crate) async fn q_recover_write(&self, region_id: u64) {
         // in both forward and reverse mode, write io will be blocked
-        let r = self.lookup(region_id);
+        let r = self.lookup(region_id).await;
         let region = r.lock().await;
         assert!(region.state != RecoverState::Recovering);
         if region.state == RecoverState::NoSync {
@@ -113,10 +124,11 @@ impl RecoverCtrl {
             return;
         }
         // handle RecoverState::Clean and RecoverState::Dirty
+        let mode = *self.mode.read_arc().await;
         assert!(
-            self.mode == state::TGT_STATE_RECOVERY_FORWARD_FULL
-            || self.mode == state::TGT_STATE_RECOVERY_FORWARD_PART
-            || self.mode == state::TGT_STATE_RECOVERY_REVERSE_FULL
+            mode == state::TGT_STATE_RECOVERY_FORWARD_FULL
+            || mode == state::TGT_STATE_RECOVERY_FORWARD_PART
+            || mode == state::TGT_STATE_RECOVERY_REVERSE_FULL
         );
         // in both mode, go ahead to write on primary
         return;

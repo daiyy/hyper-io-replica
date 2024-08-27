@@ -5,6 +5,7 @@ use smol::channel;
 use log::{info, debug};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
+use crate::recover::RecoverCtrl;
 
 pub(crate) struct PendingIo {
     flags: u32,
@@ -114,7 +115,7 @@ impl TgtPendingBlocksPool {
         self.tx.clone()
     }
 
-    pub(crate) async fn main_loop(self, state: GlobalTgtState, region: Region) {
+    pub(crate) async fn main_loop(self, state: GlobalTgtState, region: Region, recover: RecoverCtrl) {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
         info!("  - region {:?}", region);
@@ -140,10 +141,10 @@ impl TgtPendingBlocksPool {
         info!("TgtPendingBlocksPool quit");
     }
 
-    pub(crate) fn start(self, state: GlobalTgtState, region: Region) -> std::thread::JoinHandle<()> {
+    pub(crate) fn start(self, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()> {
         std::thread::spawn(|| {
             smol::block_on(async move {
-                self.main_loop(state, region).await;
+                self.main_loop(state, region, recover).await;
             });
         })
     }

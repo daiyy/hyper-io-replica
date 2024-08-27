@@ -17,6 +17,7 @@ use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 use crate::state::{LocalTgtState, GlobalTgtState};
 use crate::state;
 use crate::region;
+use crate::recover;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -473,9 +474,11 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let (back_file_size, _, _) = crate::ublk_file_size(&lo.back_file).unwrap();
     let g_region = region::Region::new(back_file_size, region::DEFAULT_REGION_SIZE);
 
+    let recover_ctrl = recover::RecoverCtrl::default();
+
     let tgt = TgtPendingBlocksPool::new();
     let tx = tgt.get_tx_chan();
-    let main = tgt.start(tgt_state, g_region.clone());
+    let main = tgt.start(tgt_state, g_region.clone(), recover_ctrl);
     let nr_queues = ctrl.dev_info().nr_hw_queues as usize;
     let t_barrier = Arc::new(Barrier::new(nr_queues));
 
