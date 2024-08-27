@@ -100,14 +100,20 @@ impl LocalPendingBlocksPool {
 pub(crate) struct TgtPendingBlocksPool {
     rx: channel::Receiver<Vec<PendingIo>>,
     tx: channel::Sender<Vec<PendingIo>>,
+    pending_queue: Vec<PendingIo>,
+    pending_bytes: usize,
+    max_capacity: usize,
 }
 
 impl TgtPendingBlocksPool {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(max_capacity: usize) -> Self {
         let (tx, rx) = channel::unbounded();
         Self {
             rx: rx,
             tx: tx,
+            pending_queue: Vec::new(),
+            pending_bytes: 0,
+            max_capacity: max_capacity,
         }
     }
 
@@ -115,18 +121,23 @@ impl TgtPendingBlocksPool {
         self.tx.clone()
     }
 
-    pub(crate) async fn main_loop(self, state: GlobalTgtState, region: Region, recover: RecoverCtrl) {
+    pub(crate) async fn main_loop(mut self, state: GlobalTgtState, region: Region, recover: RecoverCtrl) {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
         info!("  - region {:?}", region);
         loop {
             match self.rx.try_recv() {
-                Ok(v) => {
-                    debug!("TgtPendingBlocksPool receved {} size of pending io vec", v.len());
-                    println!("TgtPendingBlocksPool receved {} size of pending io vec", v.len());
+                Ok(mut v) => {
+                    let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
+                    self.pending_bytes += total_bytes;
+                    self.pending_queue.append(&mut v);
+                    if self.pending_bytes >= self.max_capacity {
+                        debug!("TgtPendingBlocksPool take out {} bytes of pending io vec len {}", self.pending_bytes, self.pending_queue.len());
+                        self.pending_queue = Vec::new();
+                        self.pending_bytes = 0;
+                    }
                 },
                 Err(channel::TryRecvError::Empty) => {
-                    debug!("TgtPendingBlocksPool region dirty: {}", region.is_dirty());
                     if region.is_dirty() {
                         debug!("TgtPendingBlocksPool region dirty: {}", region.is_dirty());
                     }
@@ -135,8 +146,6 @@ impl TgtPendingBlocksPool {
                     break;
                 },
             }
-        }
-        while let Ok(v) = self.rx.recv().await {
         }
         info!("TgtPendingBlocksPool quit");
     }

@@ -19,6 +19,8 @@ use crate::state;
 use crate::region;
 use crate::recover;
 
+pub(crate) const MB: usize = 1024 * 1024;
+
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
     #[command(flatten)]
@@ -492,7 +494,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     let g_recover_ctrl = recover::RecoverCtrl::default();
 
-    let tgt = TgtPendingBlocksPool::new();
+    let tgt = TgtPendingBlocksPool::new(MB);
     let tx = tgt.get_tx_chan();
     let main = tgt.start(tgt_state, g_region.clone(), g_recover_ctrl.clone());
     let nr_queues = ctrl.dev_info().nr_hw_queues as usize;
@@ -504,7 +506,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             q_a_fn(qid, dev)
         } else {
             // setup thread local pending blocks pool
-            let pool = LocalPendingBlocksPool::new(1024*1024, tx);
+            let pool = LocalPendingBlocksPool::new(usize::MAX, tx);
             PENDING_BLOCKS.set(pool);
 
             // setup thread local state
