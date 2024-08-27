@@ -126,6 +126,25 @@ impl Region {
 
         let _ = bits.fetch_and(dirty_value, Ordering::SeqCst);
     }
+
+    // find all dirty region from bitmap
+    pub fn collect(&self) -> Vec<u64> {
+        let mut v = Vec::new();
+        for (i, slot) in self.bitmap.iter().enumerate() {
+            let bits = slot.load(Ordering::SeqCst);
+            if bits == 0 { continue; }
+            for shift in 0..64 {
+                let mask: u64 = 1 << shift;
+                if bits & mask == 0 { continue; }
+                let region_id = i as u64 * 64 + shift;
+                v.push(region_id);
+            }
+        }
+        if v.len() == 0 {
+            assert!(!self.is_dirty());
+        }
+        v
+    }
 }
 
 #[inline]
