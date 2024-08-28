@@ -515,7 +515,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             PENDING_BLOCKS.set(pool);
 
             // setup thread local state
-            let state = LocalTgtState::new(g_state.clone(), t_barrier.clone());
+            let state = LocalTgtState::new(qid, g_state.clone(), t_barrier.clone());
             LOCAL_STATE.set(state);
 
             // setup thread local dirty region set
