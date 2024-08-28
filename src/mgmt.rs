@@ -37,6 +37,7 @@ impl Command {
             CommandOp::Mode => {
                 match self.dir {
                     CommandDir::Get => {
+                        return Some(format!("{:?}", state));
                     },
                     CommandDir::Set => {
                     },

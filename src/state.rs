@@ -89,7 +89,23 @@ impl fmt::Debug for GlobalTgtState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.inner.load(Ordering::SeqCst);
         let logging_enabled = state & TGT_STATE_LOGGING_ENABLED == TGT_STATE_LOGGING_ENABLED;
-        write!(f, "GlobalTgtState {{ logging_enabled: {} }}", logging_enabled)
+        let recovery_forward_full = state & TGT_STATE_RECOVERY_FORWARD_FULL == TGT_STATE_RECOVERY_FORWARD_FULL;
+        let recovery_forward_part = state & TGT_STATE_RECOVERY_FORWARD_PART == TGT_STATE_RECOVERY_FORWARD_PART;
+        let recovery_reverse_full = state & TGT_STATE_RECOVERY_REVERSE_FULL == TGT_STATE_RECOVERY_REVERSE_FULL;
+        let mut msg = Vec::new();
+        if logging_enabled {
+            msg.push("logging_enabled: true");
+        } else {
+            msg.push("logging_enabled: false");
+        }
+        if recovery_forward_full {
+            msg.push("recovery_forward_full: true");
+        } else if recovery_forward_part {
+            msg.push("recovery_forward_part: true");
+        } else if recovery_reverse_full {
+            msg.push("recovery_reverse_full: true");
+        }
+        write!(f, "GlobalTgtState {{ {} }}", msg.join(", "))
     }
 }
 
