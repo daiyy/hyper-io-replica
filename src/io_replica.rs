@@ -352,7 +352,11 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
     // expand code of ublk_wait_and_handle_ios(&exe, &q_rc);
     // this is main loop of queue
     loop {
+        // let check state change before any real activity happen
+        let _ = state::local_state_sync();
+
         while exe.try_tick() {}
+
         let mut to_wait = if pool_get_count() > 0 {
             // local pool is not empty, let's keep on executor tick
             0
@@ -362,8 +366,8 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
             1
         };
         region::local_region_map_sync(region::local_region_take());
-        // if state changed or still have inflight io, let keep looping
-        if state::local_state_sync() || q_rc.get_inflight_nr_io() > 0 {
+        // if still have inflight io, let's keep looping
+        if q_rc.get_inflight_nr_io() > 0 {
             to_wait = 0;
         }
         if q_rc.flush_and_wake_io_tasks(|data, cqe, _| ublk_wake_task(data, cqe), to_wait)
