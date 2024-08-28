@@ -1,11 +1,14 @@
 use std::fmt;
+use std::rc::Rc;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
+use smol::LocalExecutor;
 use log::{info, debug};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
+use crate::mgmt::CommandChannel;
 
 pub(crate) struct PendingIo {
     flags: u32,
@@ -121,30 +124,19 @@ impl TgtPendingBlocksPool {
         self.tx.clone()
     }
 
-    pub(crate) async fn main_loop(mut self, state: GlobalTgtState, region: Region, recover: RecoverCtrl) {
+    pub(crate) async fn main_loop(mut self, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
         info!("  - region {:?}", region);
-        loop {
-            match self.rx.try_recv() {
-                Ok(mut v) => {
-                    let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
-                    self.pending_bytes += total_bytes;
-                    self.pending_queue.append(&mut v);
-                    if self.pending_bytes >= self.max_capacity {
-                        debug!("TgtPendingBlocksPool take out {} bytes of pending io vec len {}", self.pending_bytes, self.pending_queue.len());
-                        self.pending_queue = Vec::new();
-                        self.pending_bytes = 0;
-                        state.set_logging_disable();
-                    }
-                },
-                Err(channel::TryRecvError::Empty) => {
-                    if region.is_dirty() {
-                    }
-                },
-                _ => {
-                    break;
-                },
+        while let Ok(mut v) = self.rx.recv().await {
+            let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
+            self.pending_bytes += total_bytes;
+            self.pending_queue.append(&mut v);
+            if self.pending_bytes >= self.max_capacity {
+                debug!("TgtPendingBlocksPool take out {} bytes of pending io vec len {}", self.pending_bytes, self.pending_queue.len());
+                self.pending_queue = Vec::new();
+                self.pending_bytes = 0;
+                state.set_logging_disable();
             }
         }
         info!("TgtPendingBlocksPool quit");
@@ -152,9 +144,29 @@ impl TgtPendingBlocksPool {
 
     pub(crate) fn start(self, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()> {
         std::thread::spawn(|| {
-            smol::block_on(async move {
-                self.main_loop(state, region, recover).await;
-            });
+            let mut f_vec = Vec::new();
+            let exec = LocalExecutor::new();
+
+            let rc_state = Rc::new(state);
+            let rc_region = Rc::new(region);
+            let rc_recover = Rc::new(recover);
+
+            let c_state = rc_state.clone();
+            let c_region = rc_region.clone();
+            let c_recover = rc_recover.clone();
+            f_vec.push(exec.spawn(async move {
+                self.main_loop(c_state, c_region, c_recover).await;
+            }));
+
+            let cmd_chan = CommandChannel::new();
+            let c_state = rc_state.clone();
+            let c_region = rc_region.clone();
+            let c_recover = rc_recover.clone();
+            f_vec.push(exec.spawn(async move {
+                cmd_chan.main_handler(c_state, c_region, c_recover).await;
+            }));
+
+            smol::block_on(async { loop { exec.tick().await }});
         })
     }
 }

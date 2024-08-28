@@ -25,6 +25,7 @@ mod pool;
 mod state;
 mod region;
 mod recover;
+mod mgmt;
 
 #[derive(Parser)]
 #[command(version)]
