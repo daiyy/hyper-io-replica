@@ -10,7 +10,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::collections::HashSet;
 use std::sync::{Arc, Barrier};
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
@@ -349,11 +349,13 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
         }
     }));
 
+    // tracking wait time of flush_and_wake_io_tasks
+    let mut wait_time = Duration::new(0, 0);
     // expand code of ublk_wait_and_handle_ios(&exe, &q_rc);
     // this is main loop of queue
     loop {
         // let check state change before any real activity happen
-        let _ = state::local_state_sync();
+        let _ = state::local_state_sync(&wait_time);
 
         while exe.try_tick() {}
 
@@ -370,11 +372,13 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
         if q_rc.get_inflight_nr_io() > 0 {
             to_wait = 0;
         }
+        let start = Instant::now();
         if q_rc.flush_and_wake_io_tasks(|data, cqe, _| ublk_wake_task(data, cqe), to_wait)
             .is_err()
         {
             break;
         }
+        wait_time = start.elapsed();
     }
 
     // clean up buf

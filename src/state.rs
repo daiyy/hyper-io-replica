@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Barrier;
+use std::time::Duration;
 use log::info;
 use crate::io_replica::LOCAL_STATE;
 
@@ -33,10 +34,10 @@ impl LocalTgtState {
     // download global state to local
     // return if or not we need to wait on barrier
     #[inline]
-    fn download(&mut self) -> bool {
+    fn download(&mut self, wait_time: &Duration) -> bool {
         let state = self.global.load(Ordering::SeqCst);
         if self.inner != state {
-            info!("qid({}) local state changed from {} => {}", self.qid, state, self.inner);
+            info!("qid({}) local state wait {:?} changed from {} => {}", self.qid, wait_time, state, self.inner);
             self.inner = state;
             return true;
         }
@@ -52,7 +53,7 @@ impl LocalTgtState {
     // sync local state with global
     // return:
     //   - if state changed
-    pub(crate) fn sync(&mut self) -> bool {
+    pub(crate) fn sync(&mut self, wait_time: &Duration) -> bool {
         if self.changed {
             self.upload();
             self.changed = false;
@@ -60,7 +61,7 @@ impl LocalTgtState {
             //self.barrier.wait();
             return true;
         }
-        if self.download() {
+        if self.download(wait_time) {
             // FIXME: can not wait barrier, main loop would be block for 20s
             //self.barrier.wait();
             return true;
@@ -152,9 +153,9 @@ impl GlobalTgtState {
 }
 
 #[inline]
-pub(crate) fn local_state_sync() -> bool {
+pub(crate) fn local_state_sync(wait_time: &Duration) -> bool {
     LOCAL_STATE.with(|state| {
-        state.borrow_mut().sync()
+        state.borrow_mut().sync(wait_time)
     })
 }
 
