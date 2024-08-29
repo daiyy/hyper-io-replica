@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -16,8 +17,8 @@ pub(crate) enum RecoverState {
 }
 
 pub(crate) struct Region {
-    id: u64,
-    state: RecoverState,
+    pub(crate) id: u64,
+    pub(crate) state: RecoverState,
 }
 
 #[derive(Clone)]
@@ -89,8 +90,39 @@ impl RecoverCtrl {
         self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_part(&self) {
-        todo!();
+    pub(crate) fn rebuild_mode_forward_part(&self, nr_regions: usize, g_region: Rc<region::Region>) {
+        // get all dirty regions
+        let v = g_region.collect();
+        // rebuild
+        let mut map = HashMap::new();
+        for i in 0..nr_regions as u64 {
+            map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::Clean })));
+        }
+        // update NoSync region
+        let mut nosync = Vec::new();
+        for i in v.iter() {
+            let region = Arc::new(Mutex::new(Region { id: *i, state: RecoverState::NoSync }));
+            map.insert(*i, region.clone());
+            nosync.push((*i, region));
+        }
+        // build queue for NoSync region
+        let mut queue = VecDeque::new();
+        for (region_id, region) in nosync.iter() {
+            queue.push_back((*region_id, region.clone()));
+        }
+
+        // update inner
+        let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
+        *lock = map;
+
+        let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
+        *lock = queue;
+
+        let mut lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
+        *lock = state::TGT_STATE_RECOVERY_FORWARD_PART;
+
+        // reset global region and clear dirty flag
+        g_region.reset();
     }
 
     pub(crate) fn mode(&self) -> u64 {

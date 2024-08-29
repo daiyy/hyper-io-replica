@@ -49,6 +49,14 @@ impl Region {
         }
     }
 
+    // reset all dirty bits to 0 and clear dirty flag
+    pub fn reset(&self) {
+        for slot in self.bitmap.iter() {
+            slot.store(0, Ordering::SeqCst);
+        }
+        self.dirty.store(false, Ordering::SeqCst);
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::SeqCst)
     }
