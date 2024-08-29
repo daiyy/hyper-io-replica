@@ -40,6 +40,22 @@ impl Command {
                         return Some(format!("{:?}", state));
                     },
                     CommandDir::Set => {
+                        if let Some(mode) = self.params.get("mode") {
+                            let msg = match mode.as_u64().expect("invalid value of 'mode'") {
+                                3 => {
+                                    let v = region.collect();
+                                    recover.rebuild_mode_forward_part(region.nr_regions(), region);
+                                    // TODO: kickoff region recover process
+                                    state.set_recovery_forward_part();
+                                    format!("state set to {:?}", state)
+                                },
+                                v @ _ => {
+                                    format!("unkown argument 'mode' {}", v)
+                                }
+                            };
+                            return Some(msg);
+                        }
+                        return Some(format!("incomplete argument: 'mode' missed"));
                     },
                 }
             },

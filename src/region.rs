@@ -61,6 +61,11 @@ impl Region {
         self.dirty.load(Ordering::SeqCst)
     }
 
+    #[inline]
+    pub fn nr_regions(&self) -> u64 {
+        self.nr_regions
+    }
+
     // convert to region id
     // return: region id
     #[inline]

@@ -90,12 +90,12 @@ impl RecoverCtrl {
         self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_part(&self, nr_regions: usize, g_region: Rc<region::Region>) {
+    pub(crate) fn rebuild_mode_forward_part(&self, nr_regions: u64, g_region: Rc<region::Region>) {
         // get all dirty regions
         let v = g_region.collect();
         // rebuild
         let mut map = HashMap::new();
-        for i in 0..nr_regions as u64 {
+        for i in 0..nr_regions {
             map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::Clean })));
         }
         // update NoSync region
