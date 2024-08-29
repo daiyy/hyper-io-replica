@@ -355,7 +355,18 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
     // this is main loop of queue
     loop {
         // let check state change before any real activity happen
-        let _ = state::local_state_sync(&wait_time);
+        let changed = state::local_state_sync(&wait_time);
+        // NOTICE:
+        // when transition from logging enable/disable -> recovery mode
+        // check if we still have dirty region in local hash set with not yet report to global
+        if changed && state::local_state_recovery() {
+            if region::local_region_dirty_count() > 0 {
+                panic!("qid({}) local state changed, \
+                    but local dirty region set is still have {} regions not yet report to global",
+                    qid, region::local_region_dirty_count()
+                );
+            }
+        }
 
         while exe.try_tick() {}
 

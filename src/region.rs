@@ -168,6 +168,13 @@ pub(crate) fn local_region_take() -> Vec<u64> {
 }
 
 #[inline]
+pub(crate) fn local_region_dirty_count() -> usize {
+    LOCAL_DIRTY_REGION.with(|set| {
+        set.borrow().len()
+    })
+}
+
+#[inline]
 pub(crate) fn local_region_map_sync(dirty_region_ids: Vec<u64>) {
     LOCAL_REGION_MAP.with(|map| {
         for region_id in dirty_region_ids {

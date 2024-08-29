@@ -84,6 +84,11 @@ impl LocalTgtState {
     pub(crate) fn is_recovery_reverse_full(&self) -> bool {
         self.inner & TGT_STATE_RECOVERY_REVERSE_FULL == TGT_STATE_RECOVERY_REVERSE_FULL
     }
+
+    pub(crate) fn is_recovery(&self) -> bool {
+        let recovery_state = TGT_STATE_RECOVERY_FORWARD_FULL | TGT_STATE_RECOVERY_FORWARD_PART | TGT_STATE_RECOVERY_REVERSE_FULL;
+        self.inner & recovery_state > 0
+    }
 }
 
 pub(crate) struct GlobalTgtState {
@@ -184,5 +189,12 @@ pub(crate) fn local_state_recovery_forward_part() -> bool {
 pub(crate) fn local_state_recovery_reverse_full() -> bool {
     LOCAL_STATE.with(|state| {
         state.borrow().is_recovery_reverse_full()
+    })
+}
+
+#[inline]
+pub(crate) fn local_state_recovery() -> bool {
+    LOCAL_STATE.with(|state| {
+        state.borrow().is_recovery()
     })
 }
