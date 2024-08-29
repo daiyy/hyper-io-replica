@@ -89,7 +89,7 @@ impl Region {
 
         // FIXME: this check should be remove one day
         if next_region_id != region_id {
-            panic!("cross region access is not allowned - region id {}, next: {}", region_id, next_region_id);
+            panic!("cross region access is not allowned - region id {}, next: {}, iod: {:?}", region_id, next_region_id, iod);
         }
         return region_id;
     }
