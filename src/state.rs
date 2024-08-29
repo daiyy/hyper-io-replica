@@ -37,7 +37,7 @@ impl LocalTgtState {
     fn download(&mut self, wait_time: &Duration) -> bool {
         let state = self.global.load(Ordering::SeqCst);
         if self.inner != state {
-            info!("qid({}) local state wait {:?} changed from {} => {}", self.qid, wait_time, state, self.inner);
+            info!("qid({}) local state wait {:?} changed from {} => {}", self.qid, wait_time, self.inner, state);
             self.inner = state;
             return true;
         }
