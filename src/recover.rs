@@ -70,6 +70,9 @@ impl RecoverCtrl {
     }
 
     fn rebuild_mode_full(&self, nr_regions: usize, mode: u64) {
+        // mode as whole transaction lock
+        let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
+
         let (region_map, queue) = Self::init_no_sync(nr_regions);
 
         let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
@@ -78,8 +81,8 @@ impl RecoverCtrl {
         let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
         *lock = queue;
 
-        let mut lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
-        *lock = mode;
+        // release mode lock
+        *mode_lock = mode;
     }
 
     pub(crate) fn rebuild_mode_reverse_full(&self, nr_regions: usize) {
@@ -91,6 +94,9 @@ impl RecoverCtrl {
     }
 
     pub(crate) fn rebuild_mode_forward_part(&self, nr_regions: u64, g_region: Rc<region::Region>) {
+        // mode as whole transaction lock
+        let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
+
         // get all dirty regions
         let v = g_region.collect();
         // rebuild
@@ -118,11 +124,11 @@ impl RecoverCtrl {
         let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
         *lock = queue;
 
-        let mut lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
-        *lock = state::TGT_STATE_RECOVERY_FORWARD_PART;
-
         // reset global region and clear dirty flag
         g_region.reset();
+
+        // release mode lock
+        *mode_lock = state::TGT_STATE_RECOVERY_FORWARD_PART;
     }
 
     pub(crate) fn mode(&self) -> u64 {
