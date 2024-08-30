@@ -1,3 +1,4 @@
+use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::RefCell;
@@ -9,7 +10,7 @@ use crate::state;
 use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub(crate) enum RecoverState {
     NoSync,     // not yet sync
     Recovering, // doing recovery
@@ -27,6 +28,29 @@ pub(crate) struct RecoverCtrl {
     region_map: Arc<RwLock<HashMap<u64, Arc<Mutex<Region>>>>>,
     queue: Arc<Mutex<VecDeque<(u64, Arc<Mutex<Region>>)>>>,
     mode: Arc<RwLock<u64>>,
+}
+
+impl fmt::Debug for RecoverCtrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mode_lock = self.mode.try_read_arc().expect("unable to get read lock for mode");
+        let lock = self.region_map.try_read_arc().expect("unable to get read lock for region map");
+        let total = (*lock).len();
+
+        let mut inflight = 0;
+        let mut pending = 0;
+        for (id, region) in self.queue.try_lock_arc().expect("unable to get read lock for queue").iter() {
+            let region_lock = region.try_lock_arc().expect("unable to get read lock for recover region");
+            match (*region_lock).state {
+                RecoverState::Recovering => { inflight += 1; },
+                RecoverState::NoSync => { pending += 1; },
+                s @ _ => { panic!("invalide region {} state {:?} in recovery queue", id, s); },
+            }
+        }
+
+        let mode = *mode_lock;
+        drop(mode_lock);
+        write!(f, "RecoverCtrl {{ mode: {}, queue: inflight/pending/total {}/{}/{} }}", mode, inflight, pending, total)
+    }
 }
 
 impl Default for RecoverCtrl {
