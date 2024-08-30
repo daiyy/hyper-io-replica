@@ -46,6 +46,7 @@ impl Command {
                                 3 => {
                                     recover.rebuild_mode_forward_part(state.clone(), region);
                                     // TODO: kickoff region recover process
+                                    state.set_logging_enable();
                                     format!("state set to {:?}", state)
                                 },
                                 v @ _ => {
