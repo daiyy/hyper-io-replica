@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use smol::channel;
 use smol::lock::{Mutex, RwLock};
 use libublk::sys::ublksrv_io_desc;
 use crate::state::GlobalTgtState;
@@ -32,6 +33,9 @@ pub(crate) struct RecoverCtrl {
     region_map: Arc<RwLock<HashMap<u64, Arc<Mutex<Region>>>>>,
     queue: Arc<Mutex<VecDeque<(u64, Arc<Mutex<Region>>)>>>,
     mode: Arc<RwLock<u64>>,
+    g_state: GlobalTgtState,
+    tx: channel::Sender<bool>,
+    rx: channel::Receiver<bool>,
 }
 
 impl fmt::Debug for RecoverCtrl {
@@ -60,17 +64,26 @@ impl fmt::Debug for RecoverCtrl {
 
 impl Default for RecoverCtrl {
     fn default() -> Self {
+        let (tx, rx) = channel::bounded(1);
         Self {
             primary_path: String::new(),
             replica_path: String::new(),
             region_map: Arc::new(RwLock::new(HashMap::new())),
             queue: Arc::new(Mutex::new(VecDeque::new())),
             mode: Arc::new(RwLock::new(state::TGT_STATE_LOGGING_ENABLED)),
+            g_state: GlobalTgtState::new(),
+            tx: tx,
+            rx: rx,
         }
     }
 }
 
 impl RecoverCtrl {
+    pub(crate) fn with_g_state(mut self, g_state: GlobalTgtState) -> Self {
+        self.g_state = g_state;
+        self
+    }
+
     pub(crate) fn with_primary_path(mut self, path: &str) -> Self {
         self.primary_path = path.to_string();
         self
@@ -92,12 +105,16 @@ impl RecoverCtrl {
         for (region_id, region) in map.iter() {
             queue.push_back((*region_id, region.clone()));
         }
+        let (tx, rx) = channel::bounded(1);
         Self {
             primary_path: primary.to_string(),
             replica_path: replica.to_string(),
             region_map: Arc::new(RwLock::new(map)),
             queue: Arc::new(Mutex::new(queue)),
             mode: Arc::new(RwLock::new(mode)),
+            g_state: GlobalTgtState::new(),
+            tx: tx,
+            rx: rx,
         }
     }
 
@@ -113,17 +130,17 @@ impl RecoverCtrl {
         (map, queue)
     }
 
-    fn rebuild_mode_full(&self, state: Rc<GlobalTgtState>, nr_regions: usize, mode: u64) {
+    fn rebuild_mode_full(&self, nr_regions: usize, mode: u64) {
         // mode as whole transaction lock
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
         // we can now safely change global state
         match mode {
             state::TGT_STATE_RECOVERY_FORWARD_FULL => {
-                state.set_recovery_forward_full();
+                self.g_state.set_recovery_forward_full();
             },
             state::TGT_STATE_RECOVERY_REVERSE_FULL => {
-                state.set_recovery_reverse_full();
+                self.g_state.set_recovery_reverse_full();
             },
             _ => {
                 panic!("rebuld_mode_full - invalid mode {}", mode);
@@ -142,20 +159,20 @@ impl RecoverCtrl {
         *mode_lock = mode;
     }
 
-    pub(crate) fn rebuild_mode_reverse_full(&self, state: Rc<GlobalTgtState>, nr_regions: usize) {
-        self.rebuild_mode_full(state, nr_regions, state::TGT_STATE_RECOVERY_REVERSE_FULL);
+    pub(crate) fn rebuild_mode_reverse_full(&self, nr_regions: usize) {
+        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_REVERSE_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_full(&self, state: Rc<GlobalTgtState>, nr_regions: usize) {
-        self.rebuild_mode_full(state, nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
+    pub(crate) fn rebuild_mode_forward_full(&self, nr_regions: usize) {
+        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_part(&self, state: Rc<GlobalTgtState>, g_region: Rc<region::Region>) {
+    pub(crate) fn rebuild_mode_forward_part(&self, g_region: Rc<region::Region>) {
         // mode as whole transaction lock
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
         // we can now safely change global state
-        state.set_recovery_forward_part();
+        self.g_state.set_recovery_forward_part();
 
         // get all dirty regions
         let v = g_region.collect();
@@ -302,7 +319,55 @@ impl RecoverCtrl {
         return;
     }
 
-    pub(crate) fn do_recovery(&self) {
+    pub(crate) async fn do_recovery(&self) {
+        while let Some((region_id, region)) = self.fetch_one().await {
+            let mut lock = region.lock().await;
+            (*lock).state = RecoverState::Recovering;
+            drop(lock);
+
+            let mode = self.mode.read_arc().await;
+            let (from, to) = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
+                (self.replica_path.clone(), self.primary_path.clone())
+            } else if *mode == state::TGT_STATE_RECOVERY_FORWARD_FULL || *mode == state::TGT_STATE_RECOVERY_FORWARD_PART {
+                (self.primary_path.clone(), self.replica_path.clone())
+            } else {
+                panic!("unkown RecoverCtrl mode {} found during kickoff recover", *mode);
+            };
+            drop(mode);
+
+            println!("@@@@ copy {} => {} for region id {}", from, to, region_id);
+
+            let mut lock = region.lock().await;
+            (*lock).state = RecoverState::Clean;
+            drop(lock);
+
+            // break recover process if received cmd is false or channel closed
+            match self.rx.try_recv() {
+                Ok(cmd) => {
+                    if cmd { continue; } else { return; }
+                },
+                Err(channel::TryRecvError::Empty) => { continue; },
+                Err(channel::TryRecvError::Closed) => { return; },
+            }
+        }
+
+        // all regions recovered, clear recover state bits
+        let mut mode_lock = self.mode.write_arc().await;
+        let state = self.g_state.clear_all_recover_bits();
+        *mode_lock = state;
+    }
+
+    pub(crate) async fn main_loop(&self) {
+        // keep waiting on next cmd from channel
+        while let Ok(cmd) = self.rx.recv().await {
+            if cmd {
+                self.do_recovery().await;
+            }
+        }
+    }
+
+    pub(crate) fn kickoff(&self) {
+        let _ = self.tx.force_send(true);
     }
 }
 

@@ -522,6 +522,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let g_region = region::Region::new(back_file_size, region::DEFAULT_REGION_SIZE);
 
     let g_recover_ctrl = recover::RecoverCtrl::default()
+        .with_g_state(tgt_state.clone())
         .with_primary_path(&file_path)
         .with_replica_path(&replica);
 

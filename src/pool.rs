@@ -158,6 +158,11 @@ impl TgtPendingBlocksPool {
                 self.main_loop(c_state, c_region, c_recover).await;
             }));
 
+            let c_recover = rc_recover.clone();
+            f_vec.push(exec.spawn(async move {
+                c_recover.main_loop().await;
+            }));
+
             let cmd_chan = CommandChannel::new();
             let c_state = rc_state.clone();
             let c_region = rc_region.clone();

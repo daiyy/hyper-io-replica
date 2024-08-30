@@ -44,8 +44,8 @@ impl Command {
                         if let Some(mode) = self.params.get("mode") {
                             let msg = match mode.as_u64().expect("invalid value of 'mode'") {
                                 3 => {
-                                    recover.rebuild_mode_forward_part(state.clone(), region);
-                                    // TODO: kickoff region recover process
+                                    recover.rebuild_mode_forward_part(region);
+                                    recover.kickoff();
                                     state.set_logging_enable();
                                     format!("state set to {:?}", state)
                                 },

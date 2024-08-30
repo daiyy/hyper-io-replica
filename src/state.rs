@@ -91,6 +91,7 @@ impl LocalTgtState {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct GlobalTgtState {
     inner: Arc<AtomicU64>,
 }
@@ -154,6 +155,12 @@ impl GlobalTgtState {
     pub(crate) fn set_recovery_reverse_full(&self) {
         let state = TGT_STATE_RECOVERY_REVERSE_FULL;
         let _ = self.inner.fetch_or(state, Ordering::SeqCst);
+    }
+
+    pub(crate) fn clear_all_recover_bits(&self) -> u64 {
+        let state = !(TGT_STATE_RECOVERY_FORWARD_FULL | TGT_STATE_RECOVERY_FORWARD_PART | TGT_STATE_RECOVERY_REVERSE_FULL);
+        let _ = self.inner.fetch_and(state, Ordering::SeqCst);
+        self.inner.load(Ordering::SeqCst)
     }
 }
 
