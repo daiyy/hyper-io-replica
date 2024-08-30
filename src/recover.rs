@@ -10,6 +10,8 @@ use crate::state;
 use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
 
+const RecoveryWaitOnMs: u64 = 50;
+
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub(crate) enum RecoverState {
     NoSync,     // not yet sync
@@ -208,6 +210,18 @@ impl RecoverCtrl {
         self.queue.lock().await.pop_front()
     }
 
+    // infinite loop wait on region state from NoSync || Recovering -> Dirty || Clean
+    pub(crate) async fn wait_on(region: Arc<Mutex<Region>>) {
+        loop {
+            let lock = region.lock().await;
+            if lock.state == RecoverState::Dirty || lock.state == RecoverState::Clean {
+                break;
+            }
+            drop(lock);
+            smol::Timer::after(std::time::Duration::from_millis(RecoveryWaitOnMs)).await;
+        }
+    }
+
     // read op run in queue executor context
     pub(crate) async fn q_recover_read(&self, region_id: u64) {
         let mode = *self.mode.read_arc().await;
@@ -222,12 +236,20 @@ impl RecoverCtrl {
         // in reverse recovery mode
         let r = self.lookup(region_id).await;
         let region = r.lock().await;
-        assert!(region.state != RecoverState::Recovering);
-        if region.state == RecoverState::NoSync {
-            // trigger recover of this region in high priority
-            self.put_high_prio(region_id).await;
-            return;
-        }
+        let state = region.state;
+        drop(region);
+        match state {
+            RecoverState::NoSync => {
+                // trigger recover of this region in high priority
+                self.put_high_prio(region_id).await;
+                Self::wait_on(r.clone()).await;
+            },
+            RecoverState::Recovering => {
+                Self::wait_on(r.clone()).await;
+            },
+            _ => {
+            },
+        };
         // handle RecoverState::Clean and RecoverState::Dirty
         // region reverse recovery is done, let do read
         return;
@@ -238,12 +260,20 @@ impl RecoverCtrl {
         // in both forward and reverse mode, write io will be blocked
         let r = self.lookup(region_id).await;
         let region = r.lock().await;
-        assert!(region.state != RecoverState::Recovering);
-        if region.state == RecoverState::NoSync {
-            // trigger recover of this region in high priority
-            self.put_high_prio(region_id).await;
-            return;
-        }
+        let state = region.state;
+        drop(region);
+        match state {
+            RecoverState::NoSync => {
+                // trigger recover of this region in high priority
+                self.put_high_prio(region_id).await;
+                Self::wait_on(r.clone()).await;
+            },
+            RecoverState::Recovering => {
+                Self::wait_on(r.clone()).await;
+            },
+            _ => {
+            },
+        };
         // handle RecoverState::Clean and RecoverState::Dirty
         let mode = *self.mode.read_arc().await;
         assert!(
