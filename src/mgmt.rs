@@ -14,6 +14,7 @@ use crate::recover::RecoverCtrl;
 enum CommandOp {
     Mode,
     Region,
+    Recover,
 }
 
 #[derive(Debug)]
@@ -65,6 +66,15 @@ impl Command {
                         } else {
                             return Some(format!("g_region is CLEAN"));
                         }
+                    },
+                    CommandDir::Set => {
+                    },
+                }
+            },
+            CommandOp::Recover => {
+                match self.dir {
+                    CommandDir::Get => {
+                        return Some(format!("{:?}", recover));
                     },
                     CommandDir::Set => {
                     },
