@@ -133,27 +133,27 @@ impl GlobalTgtState {
 
     pub(crate) fn set_logging_disable(&self) {
         let state = !TGT_STATE_LOGGING_ENABLED;
-        self.inner.fetch_and(state, Ordering::SeqCst);
+        let _ = self.inner.fetch_and(state, Ordering::SeqCst);
     }
 
     pub(crate) fn set_logging_enable(&self) {
         let state = TGT_STATE_LOGGING_ENABLED;
-        self.inner.store(state, Ordering::SeqCst);
+        let _ = self.inner.fetch_or(state, Ordering::SeqCst);
     }
 
     pub(crate) fn set_recovery_forward_full(&self) {
         let state = TGT_STATE_RECOVERY_FORWARD_FULL;
-        self.inner.store(state, Ordering::SeqCst);
+        let _ = self.inner.fetch_or(state, Ordering::SeqCst);
     }
 
     pub(crate) fn set_recovery_forward_part(&self) {
         let state = TGT_STATE_RECOVERY_FORWARD_PART;
-        self.inner.store(state, Ordering::SeqCst);
+        let _ = self.inner.fetch_or(state, Ordering::SeqCst);
     }
 
     pub(crate) fn set_recovery_reverse_full(&self) {
         let state = TGT_STATE_RECOVERY_REVERSE_FULL;
-        self.inner.store(state, Ordering::SeqCst);
+        let _ = self.inner.fetch_or(state, Ordering::SeqCst);
     }
 }
 
