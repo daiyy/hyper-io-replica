@@ -71,7 +71,7 @@ impl Region {
     #[inline]
     pub fn region_id(&self, start: u64, size: u64) -> u64 {
         let region_id = start >> self.region_shift;
-        let next_region_id = (start + size) >> self.region_shift;
+        let next_region_id = (start + size - 1) >> self.region_shift;
 
         // check
         if next_region_id != region_id {
@@ -85,7 +85,7 @@ impl Region {
         let size = (iod.nr_sectors as u64) << 9;
 
         let region_id = start >> region_shift;
-        let next_region_id = (start + size) >> region_shift;
+        let next_region_id = (start + size - 1) >> region_shift;
 
         // FIXME: this check should be remove one day
         if next_region_id != region_id {
