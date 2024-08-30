@@ -37,6 +37,10 @@ pub struct IoReplicaArgs {
     /// use async_await
     #[clap(long, short = 'a', default_value_t = false)]
     pub async_await: bool,
+
+    /// replica device
+    #[clap(long)]
+    pub replica: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,6 +48,7 @@ struct LoJson {
     back_file_path: String,
     direct_io: i32,
     async_await: bool,
+    replica_dev_path: String,
 }
 
 pub(crate) struct LoopTgt {
@@ -51,6 +56,7 @@ pub(crate) struct LoopTgt {
     pub back_file: std::fs::File,
     pub direct_io: i32,
     pub async_await: bool,
+    pub replica_dev_path: String,
 }
 
 std::thread_local! {
@@ -252,7 +258,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), } });
     dev.set_target_json(val);
 
     Ok(())
@@ -450,7 +456,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, dio, ro, aa, _shm, fg) = match opt {
+    let (file, dio, ro, aa, _shm, fg, replica) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -461,6 +467,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 o.async_await,
                 Some(o.gen_arg.get_shm_id()),
                 o.gen_arg.foreground,
+                o.replica.clone(),
             )
         }
         None => {
@@ -480,6 +487,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.async_await,
                             None,
                             false,
+                            t.replica_dev_path,
                         ),
                         Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
                     }
@@ -497,8 +505,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             .open(&file)
             .unwrap(),
         direct_io: i32::from(dio),
-        back_file_path: file_path,
+        back_file_path: file_path.clone(),
         async_await: aa,
+        replica_dev_path: replica.clone(),
     };
 
     //todo: USER_COPY should be the default option
@@ -512,7 +521,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let (back_file_size, _, _) = crate::ublk_file_size(&lo.back_file).unwrap();
     let g_region = region::Region::new(back_file_size, region::DEFAULT_REGION_SIZE);
 
-    let g_recover_ctrl = recover::RecoverCtrl::default();
+    let g_recover_ctrl = recover::RecoverCtrl::default()
+        .with_primary_path(&file_path)
+        .with_replica_path(&replica);
 
     let tgt = TgtPendingBlocksPool::new(MB);
     let tx = tgt.get_tx_chan();

@@ -27,6 +27,8 @@ pub(crate) struct Region {
 
 #[derive(Clone)]
 pub(crate) struct RecoverCtrl {
+    primary_path: String,
+    replica_path: String,
     region_map: Arc<RwLock<HashMap<u64, Arc<Mutex<Region>>>>>,
     queue: Arc<Mutex<VecDeque<(u64, Arc<Mutex<Region>>)>>>,
     mode: Arc<RwLock<u64>>,
@@ -51,13 +53,16 @@ impl fmt::Debug for RecoverCtrl {
 
         let mode = *mode_lock;
         drop(mode_lock);
-        write!(f, "RecoverCtrl {{ mode: {}, queue: inflight/pending/total {}/{}/{} }}", mode, inflight, pending, total)
+        write!(f, "RecoverCtrl {{ primary: {}, replica: {}, mode: {}, queue: inflight/pending/total {}/{}/{} }}",
+            self.primary_path, self.replica_path, mode, inflight, pending, total)
     }
 }
 
 impl Default for RecoverCtrl {
     fn default() -> Self {
         Self {
+            primary_path: String::new(),
+            replica_path: String::new(),
             region_map: Arc::new(RwLock::new(HashMap::new())),
             queue: Arc::new(Mutex::new(VecDeque::new())),
             mode: Arc::new(RwLock::new(state::TGT_STATE_LOGGING_ENABLED)),
@@ -66,9 +71,19 @@ impl Default for RecoverCtrl {
 }
 
 impl RecoverCtrl {
+    pub(crate) fn with_primary_path(mut self, path: &str) -> Self {
+        self.primary_path = path.to_string();
+        self
+    }
+
+    pub(crate) fn with_replica_path(mut self, path: &str) -> Self {
+        self.replica_path = path.to_string();
+        self
+    }
+
     // init ctrl with all region in state NoSync
     #[allow(dead_code)]
-    pub(crate) fn new(nr_regions: usize, mode: u64) -> Self {
+    pub(crate) fn new(nr_regions: usize, mode: u64, primary: &str, replica: &str) -> Self {
         let mut map = HashMap::new();
         for i in 0..nr_regions as u64 {
             map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::NoSync })));
@@ -78,6 +93,8 @@ impl RecoverCtrl {
             queue.push_back((*region_id, region.clone()));
         }
         Self {
+            primary_path: primary.to_string(),
+            replica_path: replica.to_string(),
             region_map: Arc::new(RwLock::new(map)),
             queue: Arc::new(Mutex::new(queue)),
             mode: Arc::new(RwLock::new(mode)),
