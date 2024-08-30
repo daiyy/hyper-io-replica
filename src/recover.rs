@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use smol::lock::{Mutex, RwLock};
 use libublk::sys::ublksrv_io_desc;
+use crate::state::GlobalTgtState;
 use crate::state;
 use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
@@ -69,9 +70,22 @@ impl RecoverCtrl {
         (map, queue)
     }
 
-    fn rebuild_mode_full(&self, nr_regions: usize, mode: u64) {
+    fn rebuild_mode_full(&self, state: Rc<GlobalTgtState>, nr_regions: usize, mode: u64) {
         // mode as whole transaction lock
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
+
+        // we can now safely change global state
+        match mode {
+            state::TGT_STATE_RECOVERY_FORWARD_FULL => {
+                state.set_recovery_forward_full();
+            },
+            state::TGT_STATE_RECOVERY_REVERSE_FULL => {
+                state.set_recovery_reverse_full();
+            },
+            _ => {
+                panic!("rebuld_mode_full - invalid mode {}", mode);
+            }
+        }
 
         let (region_map, queue) = Self::init_no_sync(nr_regions);
 
@@ -85,22 +99,26 @@ impl RecoverCtrl {
         *mode_lock = mode;
     }
 
-    pub(crate) fn rebuild_mode_reverse_full(&self, nr_regions: usize) {
-        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_REVERSE_FULL);
+    pub(crate) fn rebuild_mode_reverse_full(&self, state: Rc<GlobalTgtState>, nr_regions: usize) {
+        self.rebuild_mode_full(state, nr_regions, state::TGT_STATE_RECOVERY_REVERSE_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_full(&self, nr_regions: usize) {
-        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
+    pub(crate) fn rebuild_mode_forward_full(&self, state: Rc<GlobalTgtState>, nr_regions: usize) {
+        self.rebuild_mode_full(state, nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_part(&self, nr_regions: u64, g_region: Rc<region::Region>) {
+    pub(crate) fn rebuild_mode_forward_part(&self, state: Rc<GlobalTgtState>, g_region: Rc<region::Region>) {
         // mode as whole transaction lock
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
+
+        // we can now safely change global state
+        state.set_recovery_forward_part();
 
         // get all dirty regions
         let v = g_region.collect();
         // rebuild
         let mut map = HashMap::new();
+        let nr_regions = g_region.nr_regions();
         for i in 0..nr_regions {
             map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::Clean })));
         }
