@@ -3,8 +3,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use log::debug;
 use smol::channel;
 use smol::lock::{Mutex, RwLock};
+use smol::fs::{OpenOptions, unix::OpenOptionsExt};
+use smol::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 use libublk::sys::ublksrv_io_desc;
 use crate::state::GlobalTgtState;
 use crate::state;
@@ -351,7 +354,28 @@ impl RecoverCtrl {
             };
             drop(mode);
 
-            println!("@@@@ copy {} => {} for region id {}", from, to, region_id);
+            let mut primary_dev = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(from.clone())
+                .await.expect("unable to open primary device");
+            let mut replica_dev = OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(to.clone())
+                .await.expect("unable to open replica device");
+
+            let offset = self.region_size * region_id;
+            let mut buf = Vec::with_capacity(self.region_size as usize);
+            buf.resize(self.region_size as usize, 0);
+
+            primary_dev.seek(smol::io::SeekFrom::Start(offset)).await.expect("unable to seek primary device");
+            primary_dev.read_exact(&mut buf).await.expect("unable to read primary deivce");
+
+            replica_dev.seek(smol::io::SeekFrom::Start(offset)).await.expect("unable to seek replica device");
+            replica_dev.write_all(&buf).await.expect("unable to write replica deivce");
+            replica_dev.flush().await.expect("unable to flush replica deivce");
+            debug!("do_recovery - copy {} => {} for region id {}", from, to, region_id);
 
             let mut lock = region.lock().await;
             (*lock).state = RecoverState::Clean;
