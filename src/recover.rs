@@ -34,6 +34,8 @@ pub(crate) struct RecoverCtrl {
     queue: Arc<Mutex<VecDeque<(u64, Arc<Mutex<Region>>)>>>,
     mode: Arc<RwLock<u64>>,
     g_state: GlobalTgtState,
+    region_size: u64,
+    nr_regions: u64,
     tx: channel::Sender<bool>,
     rx: channel::Receiver<bool>,
 }
@@ -72,6 +74,8 @@ impl Default for RecoverCtrl {
             queue: Arc::new(Mutex::new(VecDeque::new())),
             mode: Arc::new(RwLock::new(state::TGT_STATE_LOGGING_ENABLED)),
             g_state: GlobalTgtState::new(),
+            region_size: 0,
+            nr_regions: 0,
             tx: tx,
             rx: rx,
         }
@@ -79,6 +83,16 @@ impl Default for RecoverCtrl {
 }
 
 impl RecoverCtrl {
+    pub(crate) fn with_region_size(mut self, region_size: u64) -> Self {
+        self.region_size = region_size;
+        self
+    }
+
+    pub(crate) fn with_nr_regions(mut self, nr_regions: u64) -> Self {
+        self.nr_regions = nr_regions;
+        self
+    }
+
     pub(crate) fn with_g_state(mut self, g_state: GlobalTgtState) -> Self {
         self.g_state = g_state;
         self
@@ -96,7 +110,7 @@ impl RecoverCtrl {
 
     // init ctrl with all region in state NoSync
     #[allow(dead_code)]
-    pub(crate) fn new(nr_regions: usize, mode: u64, primary: &str, replica: &str) -> Self {
+    pub(crate) fn new(region_size: u64, nr_regions: u64, mode: u64, primary: &str, replica: &str) -> Self {
         let mut map = HashMap::new();
         for i in 0..nr_regions as u64 {
             map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::NoSync })));
@@ -113,14 +127,16 @@ impl RecoverCtrl {
             queue: Arc::new(Mutex::new(queue)),
             mode: Arc::new(RwLock::new(mode)),
             g_state: GlobalTgtState::new(),
+            region_size: region_size,
+            nr_regions: nr_regions,
             tx: tx,
             rx: rx,
         }
     }
 
-    fn init_no_sync(nr_regions: usize) -> (HashMap<u64, Arc<Mutex<Region>>>, VecDeque<(u64, Arc<Mutex<Region>>)>) {
+    fn init_no_sync(nr_regions: u64) -> (HashMap<u64, Arc<Mutex<Region>>>, VecDeque<(u64, Arc<Mutex<Region>>)>) {
         let mut map = HashMap::new();
-        for i in 0..nr_regions as u64 {
+        for i in 0..nr_regions {
             map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::NoSync })));
         }
         let mut queue = VecDeque::new();
@@ -130,7 +146,7 @@ impl RecoverCtrl {
         (map, queue)
     }
 
-    fn rebuild_mode_full(&self, nr_regions: usize, mode: u64) {
+    fn rebuild_mode_full(&self, mode: u64) {
         // mode as whole transaction lock
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
@@ -147,7 +163,7 @@ impl RecoverCtrl {
             }
         }
 
-        let (region_map, queue) = Self::init_no_sync(nr_regions);
+        let (region_map, queue) = Self::init_no_sync(self.nr_regions);
 
         let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
         *lock = region_map;
@@ -159,12 +175,12 @@ impl RecoverCtrl {
         *mode_lock = mode;
     }
 
-    pub(crate) fn rebuild_mode_reverse_full(&self, nr_regions: usize) {
-        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_REVERSE_FULL);
+    pub(crate) fn rebuild_mode_reverse_full(&self) {
+        self.rebuild_mode_full(state::TGT_STATE_RECOVERY_REVERSE_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_full(&self, nr_regions: usize) {
-        self.rebuild_mode_full(nr_regions, state::TGT_STATE_RECOVERY_FORWARD_FULL);
+    pub(crate) fn rebuild_mode_forward_full(&self) {
+        self.rebuild_mode_full(state::TGT_STATE_RECOVERY_FORWARD_FULL);
     }
 
     pub(crate) fn rebuild_mode_forward_part(&self, g_region: Rc<region::Region>) {
