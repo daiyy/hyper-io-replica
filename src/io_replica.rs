@@ -248,6 +248,7 @@ fn lo_init_tgt(
             io_min_shift: sz.1,
             max_sectors: info.max_io_buf_bytes >> 9,
             dev_sectors: tgt.dev_size >> 9,
+            chunk_sectors: region::DEFAULT_REGION_SIZE as u32 >> 9,
             ..Default::default()
         },
         ..Default::default()
