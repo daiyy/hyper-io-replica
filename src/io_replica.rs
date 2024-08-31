@@ -528,7 +528,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_primary_path(&file_path)
         .with_replica_path(&replica);
 
-    let tgt = TgtPendingBlocksPool::new(MB);
+    let tgt = TgtPendingBlocksPool::new(MB, &replica);
     let tx = tgt.get_tx_chan();
     let main = tgt.start(tgt_state, g_region.clone(), g_recover_ctrl.clone());
     let nr_queues = ctrl.dev_info().nr_hw_queues as usize;
