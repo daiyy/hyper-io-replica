@@ -13,13 +13,12 @@ use std::cell::RefCell;
 use std::time::{Duration, Instant};
 use std::collections::HashSet;
 use std::sync::{Arc, Barrier};
+use bytesize::ByteSize;
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 use crate::state::{LocalTgtState, GlobalTgtState};
 use crate::state;
 use crate::region;
 use crate::recover;
-
-pub(crate) const MB: usize = 1024 * 1024;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -41,6 +40,14 @@ pub struct IoReplicaArgs {
     /// replica device
     #[clap(long)]
     pub replica: String,
+
+    /// region size
+    #[clap(long, default_value = "8MiB")]
+    pub region_size: String,
+
+    /// pool size
+    #[clap(long, default_value = "1GiB")]
+    pub pool_size: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,6 +56,8 @@ struct LoJson {
     direct_io: i32,
     async_await: bool,
     replica_dev_path: String,
+    region_size: u64,
+    pool_size: u64,
 }
 
 pub(crate) struct LoopTgt {
@@ -57,6 +66,8 @@ pub(crate) struct LoopTgt {
     pub direct_io: i32,
     pub async_await: bool,
     pub replica_dev_path: String,
+    pub region_size: u64,
+    pub pool_size: u64,
 }
 
 std::thread_local! {
@@ -77,6 +88,10 @@ std::thread_local! {
 
 std::thread_local! {
     pub(crate) static LOCAL_RECOVER_CTRL: RefCell<recover::RecoverCtrl> = panic!("local incar of global recover ctrl is not yet init");
+}
+
+std::thread_local! {
+    pub(crate) static LOCAL_REGION_SHIFT: RefCell<u32> = panic!("local region shift value is not yet init");
 }
 
 #[inline]
@@ -248,7 +263,7 @@ fn lo_init_tgt(
             io_min_shift: sz.1,
             max_sectors: info.max_io_buf_bytes >> 9,
             dev_sectors: tgt.dev_size >> 9,
-            chunk_sectors: region::DEFAULT_REGION_SIZE as u32 >> 9,
+            chunk_sectors: lo.region_size as u32 >> 9,
             ..Default::default()
         },
         ..Default::default()
@@ -259,7 +274,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, } });
     dev.set_target_json(val);
 
     Ok(())
@@ -457,7 +472,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, dio, ro, aa, _shm, fg, replica) = match opt {
+    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -469,6 +484,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 Some(o.gen_arg.get_shm_id()),
                 o.gen_arg.foreground,
                 o.replica.clone(),
+                o.region_size.parse::<ByteSize>().expect("unable to parse input region size").0,
+                o.pool_size.parse::<ByteSize>().expect("unable to parse input pool size").0,
             )
         }
         None => {
@@ -489,6 +506,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             None,
                             false,
                             t.replica_dev_path,
+                            t.region_size,
+                            t.pool_size,
                         ),
                         Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
                     }
@@ -499,7 +518,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     };
 
     let file_path = format!("{}", file.as_path().display());
-    let lo = LoopTgt {
+    let mut lo = LoopTgt {
         back_file: std::fs::OpenOptions::new()
             .read(true)
             .write(!ro)
@@ -509,6 +528,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         back_file_path: file_path.clone(),
         async_await: aa,
         replica_dev_path: replica.clone(),
+        region_size: region_sz,
+        pool_size: pool_sz,
     };
 
     //todo: USER_COPY should be the default option
@@ -520,20 +541,24 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let g_state = tgt_state.state_clone();
 
     let (back_file_size, _, _) = crate::ublk_file_size(&lo.back_file).unwrap();
-    let g_region = region::Region::new(back_file_size, region::DEFAULT_REGION_SIZE);
+    let g_region = region::Region::new(back_file_size, region_sz);
+
+    // reset region size with checked one
+    lo.region_size = g_region.region_size();
 
     let g_recover_ctrl = recover::RecoverCtrl::default()
-        .with_region_size(region::DEFAULT_REGION_SIZE)
+        .with_region_size(g_region.region_size())
         .with_nr_regions(g_region.nr_regions())
         .with_g_state(tgt_state.clone())
         .with_primary_path(&file_path)
         .with_replica_path(&replica);
 
-    let tgt = TgtPendingBlocksPool::new(MB, &replica);
+    let tgt = TgtPendingBlocksPool::new(pool_sz as usize, &replica);
     let tx = tgt.get_tx_chan();
     let main = tgt.start(tgt_state, g_region.clone(), g_recover_ctrl.clone());
     let nr_queues = ctrl.dev_info().nr_hw_queues as usize;
     let t_barrier = Arc::new(Barrier::new(nr_queues));
+    let region_shift = g_region.region_shift();
 
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
@@ -557,6 +582,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
             // setup thread local incar of global recover ctrl
             LOCAL_RECOVER_CTRL.set(g_recover_ctrl.clone());
+
+            // setup thread local region shift value
+            LOCAL_REGION_SHIFT.set(region_shift);
 
             new_q_fn(qid, dev)
         },

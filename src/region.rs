@@ -3,10 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::collections::HashSet;
 use libublk::sys::ublksrv_io_desc;
-use crate::io_replica::{LOCAL_DIRTY_REGION, LOCAL_REGION_MAP};
-
-pub const DEFAULT_REGION_SIZE: u64 = 8_388_608;
-pub const DEFAULT_REGION_SHIFT: u32 = 23;
+use crate::io_replica::{LOCAL_DIRTY_REGION, LOCAL_REGION_MAP, LOCAL_REGION_SHIFT};
 
 #[derive(Clone)]
 pub struct Region {
@@ -64,6 +61,16 @@ impl Region {
     #[inline]
     pub fn nr_regions(&self) -> u64 {
         self.nr_regions
+    }
+
+    #[inline]
+    pub fn region_size(&self) -> u64 {
+        self.region_size
+    }
+
+    #[inline]
+    pub fn region_shift(&self) -> u32 {
+        self.region_shift
     }
 
     // convert to region id
@@ -162,7 +169,7 @@ impl Region {
 
 #[inline]
 pub(crate) fn local_region_mark_dirty(iod: &ublksrv_io_desc) {
-    let region_id = Region::iod_to_region_id(iod, DEFAULT_REGION_SHIFT);
+    let region_id = Region::iod_to_region_id(iod, local_region_shift());
     LOCAL_DIRTY_REGION.with(|set| {
         let _ = set.borrow_mut().insert(region_id);
     })
@@ -194,6 +201,11 @@ pub(crate) fn local_region_map_sync(dirty_region_ids: Vec<u64>) {
             map.borrow().mark_dirty_region_id(region_id);
         }
     })
+}
+
+#[inline]
+pub(crate) fn local_region_shift() -> u32 {
+    LOCAL_REGION_SHIFT.with(|v| { *(v.borrow()) })
 }
 
 #[cfg(test)]

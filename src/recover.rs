@@ -413,14 +413,14 @@ impl RecoverCtrl {
 
 #[inline]
 pub(crate) async fn local_recover_ctrl_read(iod: &ublksrv_io_desc) {
-    let region_id = region::Region::iod_to_region_id(iod, region::DEFAULT_REGION_SHIFT);
+    let region_id = region::Region::iod_to_region_id(iod, region::local_region_shift());
     let ctrl = LOCAL_RECOVER_CTRL.with_borrow(|x| x.clone());
     ctrl.q_recover_read(region_id).await;
 }
 
 #[inline]
 pub(crate) async fn local_recover_ctrl_write(iod: &ublksrv_io_desc) {
-    let region_id = region::Region::iod_to_region_id(iod, region::DEFAULT_REGION_SHIFT);
+    let region_id = region::Region::iod_to_region_id(iod, region::local_region_shift());
     let ctrl = LOCAL_RECOVER_CTRL.with_borrow(|x| x.clone());
     ctrl.q_recover_write(region_id).await;
 }
