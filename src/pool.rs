@@ -150,7 +150,7 @@ impl TgtPendingBlocksPool {
         }
     }
 
-    pub(crate) async fn main_loop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {
+    pub(crate) async fn main_loop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, _recover: Rc<RecoverCtrl>) {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
         info!("  - region {:?}", region);
@@ -186,7 +186,7 @@ impl TgtPendingBlocksPool {
         info!("TgtPendingBlocksPool quit");
     }
 
-    pub(crate) async fn periodic(pool: Rc<RefCell<Self>> , state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {
+    pub(crate) async fn periodic(pool: Rc<RefCell<Self>>) {
         loop {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
             let pending_bytes = pool.borrow().pending_bytes;
@@ -224,11 +224,8 @@ impl TgtPendingBlocksPool {
             }));
 
             let c_pool = rc_pool.clone();
-            let c_state = rc_state.clone();
-            let c_region = rc_region.clone();
-            let c_recover = rc_recover.clone();
             f_vec.push(exec.spawn(async move {
-                Self::periodic(c_pool, c_state, c_region, c_recover).await;
+                Self::periodic(c_pool).await;
             }));
 
             let c_recover = rc_recover.clone();

@@ -2,7 +2,7 @@ use std::rc::Rc;
 use std::collections::HashMap;
 use smol::net::unix::UnixListener;
 use smol::stream::StreamExt;
-use smol::io::{BufReader, AsyncReadExt, AsyncWriteExt};
+use smol::io::{BufReader, AsyncWriteExt};
 use smol::io::AsyncBufReadExt;
 use serde::{Serialize, Deserialize};
 use crate::state::GlobalTgtState;

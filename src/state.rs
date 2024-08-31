@@ -2,7 +2,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Barrier;
 use std::time::Duration;
 use log::info;
 use crate::io_replica::LOCAL_STATE;
@@ -16,17 +15,15 @@ pub(crate) struct LocalTgtState {
     inner: u64,     // local copy of tgt state
     changed: bool,  // if local state changed
     global: Arc<AtomicU64>,
-    barrier: Arc<Barrier>,
     qid: u16,
 }
 
 impl LocalTgtState {
-    pub(crate) fn new(qid: u16, global: Arc<AtomicU64>, barrier: Arc<Barrier>) -> Self {
+    pub(crate) fn new(qid: u16, global: Arc<AtomicU64>) -> Self {
         Self {
             inner: global.load(Ordering::SeqCst),
             changed: false,
             global: global,
-            barrier: barrier,
             qid: qid,
         }
     }
@@ -57,13 +54,9 @@ impl LocalTgtState {
         if self.changed {
             self.upload();
             self.changed = false;
-            // FIXME: can not wait barrier, main loop would be block for 20s
-            //self.barrier.wait();
             return true;
         }
         if self.download(wait_time) {
-            // FIXME: can not wait barrier, main loop would be block for 20s
-            //self.barrier.wait();
             return true;
         }
         false

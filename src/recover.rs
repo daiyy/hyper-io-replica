@@ -1,7 +1,6 @@
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use log::debug;
 use smol::channel;
@@ -14,7 +13,7 @@ use crate::state;
 use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
 
-const RecoveryWaitOnMs: u64 = 50;
+const RECOVERY_WAIT_ON_MS: u64 = 50;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub(crate) enum RecoverState {
@@ -25,7 +24,6 @@ pub(crate) enum RecoverState {
 }
 
 pub(crate) struct Region {
-    pub(crate) id: u64,
     pub(crate) state: RecoverState,
 }
 
@@ -116,7 +114,7 @@ impl RecoverCtrl {
     pub(crate) fn new(region_size: u64, nr_regions: u64, mode: u64, primary: &str, replica: &str) -> Self {
         let mut map = HashMap::new();
         for i in 0..nr_regions as u64 {
-            map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::NoSync })));
+            map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::NoSync })));
         }
         let mut queue = VecDeque::new();
         for (region_id, region) in map.iter() {
@@ -140,7 +138,7 @@ impl RecoverCtrl {
     fn init_no_sync(nr_regions: u64) -> (HashMap<u64, Arc<Mutex<Region>>>, VecDeque<(u64, Arc<Mutex<Region>>)>) {
         let mut map = HashMap::new();
         for i in 0..nr_regions {
-            map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::NoSync })));
+            map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::NoSync })));
         }
         let mut queue = VecDeque::new();
         for (region_id, region) in map.iter() {
@@ -199,12 +197,12 @@ impl RecoverCtrl {
         let mut map = HashMap::new();
         let nr_regions = g_region.nr_regions();
         for i in 0..nr_regions {
-            map.insert(i, Arc::new(Mutex::new(Region { id: i, state: RecoverState::Clean })));
+            map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::Clean })));
         }
         // update NoSync region
         let mut nosync = Vec::new();
         for i in v.iter() {
-            let region = Arc::new(Mutex::new(Region { id: *i, state: RecoverState::NoSync }));
+            let region = Arc::new(Mutex::new(Region { state: RecoverState::NoSync }));
             map.insert(*i, region.clone());
             nosync.push((*i, region));
         }
@@ -271,7 +269,7 @@ impl RecoverCtrl {
                 break;
             }
             drop(lock);
-            smol::Timer::after(std::time::Duration::from_millis(RecoveryWaitOnMs)).await;
+            smol::Timer::after(std::time::Duration::from_millis(RECOVERY_WAIT_ON_MS)).await;
         }
     }
 
