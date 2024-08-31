@@ -1,6 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::collections::{HashMap, VecDeque};
 use log::debug;
 use smol::channel;
@@ -37,6 +38,8 @@ pub(crate) struct RecoverCtrl {
     g_state: GlobalTgtState,
     region_size: u64,
     nr_regions: u64,
+    inflight: Arc<AtomicU64>,
+    pending: Arc<AtomicU64>,
     tx: channel::Sender<bool>,
     rx: channel::Receiver<bool>,
 }
@@ -77,6 +80,8 @@ impl Default for RecoverCtrl {
             g_state: GlobalTgtState::new(),
             region_size: 0,
             nr_regions: 0,
+            inflight: Arc::new(AtomicU64::new(0)),
+            pending: Arc::new(AtomicU64::new(0)),
             tx: tx,
             rx: rx,
         }
@@ -109,11 +114,41 @@ impl RecoverCtrl {
         self
     }
 
+    #[inline]
+    fn inc_inflight(&self, i: u64) {
+        self.inflight.fetch_add(i, Ordering::SeqCst);
+    }
+
+    #[inline]
+    fn dec_inflight(&self, i: u64) {
+        self.inflight.fetch_sub(i, Ordering::SeqCst);
+    }
+
+    #[inline]
+    fn get_inflight(&self) -> u64 {
+        self.inflight.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    fn inc_pending(&self, i: u64) {
+        self.pending.fetch_add(i, Ordering::SeqCst);
+    }
+
+    #[inline]
+    fn dec_pending(&self, i: u64) {
+        self.pending.fetch_sub(i, Ordering::SeqCst);
+    }
+
+    #[inline]
+    fn get_pending(&self) -> u64 {
+        self.pending.load(Ordering::SeqCst)
+    }
+
     // init ctrl with all region in state NoSync
     #[allow(dead_code)]
     pub(crate) fn new(region_size: u64, nr_regions: u64, mode: u64, primary: &str, replica: &str) -> Self {
         let mut map = HashMap::new();
-        for i in 0..nr_regions as u64 {
+        for i in 0..nr_regions {
             map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::NoSync })));
         }
         let mut queue = VecDeque::new();
@@ -130,6 +165,8 @@ impl RecoverCtrl {
             g_state: GlobalTgtState::new(),
             region_size: region_size,
             nr_regions: nr_regions,
+            inflight: Arc::new(AtomicU64::new(0)),
+            pending: Arc::new(AtomicU64::new(nr_regions)),
             tx: tx,
             rx: rx,
         }
@@ -172,6 +209,8 @@ impl RecoverCtrl {
         let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
         *lock = queue;
 
+        self.inc_pending(self.nr_regions);
+
         // release mode lock
         *mode_lock = mode;
     }
@@ -211,6 +250,8 @@ impl RecoverCtrl {
         for (region_id, region) in nosync.iter() {
             queue.push_back((*region_id, region.clone()));
         }
+
+        self.inc_pending(queue.len() as u64);
 
         // update inner
         let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
@@ -340,6 +381,8 @@ impl RecoverCtrl {
         while let Some((region_id, region)) = self.fetch_one().await {
             let mut lock = region.lock().await;
             (*lock).state = RecoverState::Recovering;
+            self.dec_pending(1);
+            self.inc_inflight(1);
             drop(lock);
 
             let mode = self.mode.read_arc().await;
@@ -377,6 +420,7 @@ impl RecoverCtrl {
 
             let mut lock = region.lock().await;
             (*lock).state = RecoverState::Clean;
+            self.dec_inflight(1);
             drop(lock);
 
             // break recover process if received cmd is false or channel closed
@@ -389,10 +433,16 @@ impl RecoverCtrl {
             }
         }
 
+        assert!(self.get_inflight() == 0 && self.get_pending() == 0);
         // all regions recovered, clear recover state bits
         let mut mode_lock = self.mode.write_arc().await;
         let state = self.g_state.clear_all_recover_bits();
         *mode_lock = state;
+    }
+
+    // return (inflight, pending, total)
+    pub(crate) fn stat(&self) -> (u64, u64, u64) {
+        (self.get_inflight(), self.get_pending(), self.nr_regions)
     }
 
     pub(crate) async fn main_loop(&self) {

@@ -88,7 +88,9 @@ impl Command {
             CommandOp::Recover => {
                 match self.dir {
                     CommandDir::Get => {
-                        return Some(format!("{:?}", recover));
+                        let (inflight, pending, total) = recover.stat();
+                        let mode = recover.mode();
+                        return Some(format!("mode: {}, inflight/pending/total {}/{}/{}", mode, inflight, pending, total));
                     },
                     CommandDir::Set => {
                     },
