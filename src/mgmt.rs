@@ -42,9 +42,22 @@ impl Command {
                     },
                     CommandDir::Set => {
                         if let Some(mode) = self.params.get("mode") {
+                            // TODO: pre-transition check
                             let msg = match mode.as_u64().expect("invalid value of 'mode'") {
+                                2 => {
+                                    recover.rebuild_mode_forward_full();
+                                    recover.kickoff();
+                                    state.set_logging_enable();
+                                    format!("state set to {:?}", state)
+                                },
                                 3 => {
                                     recover.rebuild_mode_forward_part(region);
+                                    recover.kickoff();
+                                    state.set_logging_enable();
+                                    format!("state set to {:?}", state)
+                                },
+                                4 => {
+                                    recover.rebuild_mode_reverse_full();
                                     recover.kickoff();
                                     state.set_logging_enable();
                                     format!("state set to {:?}", state)
