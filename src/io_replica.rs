@@ -47,6 +47,10 @@ pub struct IoReplicaArgs {
     /// pool size
     #[clap(long, default_value = "1GiB")]
     pub pool_size: String,
+
+    /// device size, default is entire primary space
+    #[clap(long)]
+    pub device_size: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,6 +61,7 @@ struct LoJson {
     replica_dev_path: String,
     region_size: u64,
     pool_size: u64,
+    device_size: u64,
 }
 
 pub(crate) struct LoopTgt {
@@ -67,6 +72,7 @@ pub(crate) struct LoopTgt {
     pub replica_dev_path: String,
     pub region_size: u64,
     pub pool_size: u64,
+    pub device_size: u64,
 }
 
 std::thread_local! {
@@ -250,7 +256,8 @@ fn lo_init_tgt(
         libublk::sys::UBLK_ATTR_VOLATILE_CACHE
     };
 
-    tgt.dev_size = sz.0;
+    // use device from tgt instead from back file
+    tgt.dev_size = lo.device_size;
     //todo: figure out correct block size
     tgt.params = libublk::sys::ublk_params {
         types: libublk::sys::UBLK_PARAM_TYPE_BASIC,
@@ -273,7 +280,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, device_size: lo.device_size, } });
     dev.set_target_json(val);
 
     Ok(())
@@ -471,7 +478,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz) = match opt {
+    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, device_sz) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -485,6 +492,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 o.replica.clone(),
                 o.region_size.parse::<ByteSize>().expect("unable to parse input region size").0,
                 o.pool_size.parse::<ByteSize>().expect("unable to parse input pool size").0,
+                o.device_size.as_ref().map_or(0, |s| s.parse::<ByteSize>().expect("unable to parse input device size").0),
             )
         }
         None => {
@@ -507,6 +515,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.replica_dev_path,
                             t.region_size,
                             t.pool_size,
+                            t.device_size,
                         ),
                         Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
                     }
@@ -529,6 +538,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         replica_dev_path: replica.clone(),
         region_size: region_sz,
         pool_size: pool_sz,
+        device_size: device_sz,
     };
 
     //todo: USER_COPY should be the default option
@@ -540,7 +550,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let g_state = tgt_state.state_clone();
 
     let (back_file_size, _, _) = crate::ublk_file_size(&lo.back_file).unwrap();
-    let g_region = region::Region::new(back_file_size, region_sz);
+    if lo.device_size == 0 {
+        lo.device_size = back_file_size;
+    }
+    let g_region = region::Region::new(lo.device_size, region_sz);
 
     // reset region size with checked one
     lo.region_size = g_region.region_size();
