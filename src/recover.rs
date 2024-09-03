@@ -3,7 +3,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::collections::{HashMap, VecDeque};
-use log::debug;
 use smol::channel;
 use smol::lock::{Mutex, RwLock};
 use smol::fs::{OpenOptions, unix::OpenOptionsExt};
@@ -410,12 +409,12 @@ impl RecoverCtrl {
             };
             drop(mode);
 
-            let mut primary_dev = OpenOptions::new()
+            let mut from_dev = OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_DIRECT)
                 .open(from.clone())
                 .await.expect("unable to open primary device");
-            let mut replica_dev = OpenOptions::new()
+            let mut to_dev = OpenOptions::new()
                 .write(true)
                 .custom_flags(libc::O_DIRECT)
                 .open(to.clone())
@@ -425,13 +424,12 @@ impl RecoverCtrl {
             let mut buf = Vec::with_capacity(self.region_size as usize);
             buf.resize(self.region_size as usize, 0);
 
-            primary_dev.seek(smol::io::SeekFrom::Start(offset)).await.expect("unable to seek primary device");
-            primary_dev.read_exact(&mut buf).await.expect("unable to read primary deivce");
+            from_dev.seek(smol::io::SeekFrom::Start(offset)).await.unwrap_or_else(|_| panic!("unable to seek from device {from} for region id {region_id}"));
+            from_dev.read_exact(&mut buf).await.unwrap_or_else(|_| panic!("unable to read from deivce {from} for region id {region_id}"));
 
-            replica_dev.seek(smol::io::SeekFrom::Start(offset)).await.expect("unable to seek replica device");
-            replica_dev.write_all(&buf).await.expect("unable to write replica deivce");
-            replica_dev.flush().await.expect("unable to flush replica deivce");
-            debug!("do_recovery - copy {} => {} for region id {}", from, to, region_id);
+            to_dev.seek(smol::io::SeekFrom::Start(offset)).await.unwrap_or_else(|_| panic!("unable to seek to device {to} for region id {region_id}"));
+            to_dev.write_all(&buf).await.unwrap_or_else(|_| panic!("unable to write to deivce {to} for region id {region_id}"));
+            to_dev.flush().await.unwrap_or_else(|_| panic!("unable to flush to deivce {to} for region id {region_id}"));
 
             let mut lock = region.lock().await;
             (*lock).state = RecoverState::Clean;
