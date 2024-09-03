@@ -151,8 +151,13 @@ impl RecoverCtrl {
         for i in 0..nr_regions {
             map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::NoSync })));
         }
+
+        // sort by key
+        let mut sorted: Vec<_> = map.iter().collect();
+        sorted.sort_by_key(|i| i.0);
+
         let mut queue = VecDeque::new();
-        for (region_id, region) in map.iter() {
+        for (region_id, region) in sorted.into_iter() {
             queue.push_back((*region_id, region.clone()));
         }
         let (tx, rx) = channel::bounded(1);
@@ -177,8 +182,13 @@ impl RecoverCtrl {
         for i in 0..nr_regions {
             map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::NoSync })));
         }
+
+        // sort by key
+        let mut sorted: Vec<_> = map.iter().collect();
+        sorted.sort_by_key(|i| i.0);
+
         let mut queue = VecDeque::new();
-        for (region_id, region) in map.iter() {
+        for (region_id, region) in sorted.into_iter() {
             queue.push_back((*region_id, region.clone()));
         }
         (map, queue)
@@ -245,9 +255,14 @@ impl RecoverCtrl {
             map.insert(*i, region.clone());
             nosync.push((*i, region));
         }
+
+        // sort by key
+        let mut sorted: Vec<_> = nosync.iter().collect();
+        sorted.sort_by_key(|i| i.0);
+
         // build queue for NoSync region
         let mut queue = VecDeque::new();
-        for (region_id, region) in nosync.iter() {
+        for (region_id, region) in sorted.into_iter() {
             queue.push_back((*region_id, region.clone()));
         }
 
