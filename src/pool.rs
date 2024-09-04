@@ -13,37 +13,88 @@ use crate::region::Region;
 use crate::recover::RecoverCtrl;
 use crate::mgmt::CommandChannel;
 
-pub(crate) struct PendingIo {
+pub(crate) enum PendingIo {
+    Write(WriteIo),
+    Flush(FlushIo),
+}
+
+pub(crate) struct WriteIo {
     flags: u32,
     size: u32,
     offset: u64,
     data: IoBuf<u8>,
 }
 
+pub(crate) struct FlushIo {
+    flags: u32,
+    size: u32,
+    offset: u64,
+}
+
 impl fmt::Debug for PendingIo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PendingIo {{ flags: {}, offset: {}, size: {} }}", self.flags, self.offset, self.size)
+        match self {
+            Self::Write(io) => write!(f, "PendingIo {{ op: Write, flags: {}, offset: {}, size: {} }}", io.flags, io.offset, io.size),
+            Self::Flush(io) => write!(f, "PendingIo {{ op: Flush, flags: {}, offset: {}, size: {} }}", io.flags, io.offset, io.size),
+        }
     }
 }
 
 impl PendingIo {
     pub(crate) fn from_iodesc(iod: &ublksrv_io_desc) -> Self {
         let size = iod.nr_sectors << 9;
+        let offset = iod.start_sector << 9;
+        match iod.op_flags & 0xff {
+            libublk::sys::UBLK_IO_OP_WRITE => {},
+            libublk::sys::UBLK_IO_OP_FLUSH => {
+                return Self::Flush(FlushIo { flags: iod.op_flags, size: size, offset: offset, });
+            },
+            _ => { panic!("op {:#02x} not implement", iod.op_flags & 0xff); },
+        }
+
+        // op WRITE
         let data = IoBuf::new(size as usize);
         unsafe {
             std::ptr::copy_nonoverlapping(iod.addr as *const u8, data.as_mut_ptr(), size as usize);
         }
-        Self {
+        Self::Write(WriteIo {
             flags: iod.op_flags,
             size: size,
-            offset: iod.start_sector << 9,
+            offset: offset,
             data: data,
+        })
+    }
+
+    #[inline]
+    pub(crate) fn offset(&self) -> u64 {
+        match self {
+            Self::Write(io) => io.offset,
+            Self::Flush(io) => io.offset,
         }
     }
 
     #[inline]
     pub(crate) fn size(&self) -> usize {
-        self.size as usize
+        match self {
+            Self::Write(io) => io.size as usize,
+            Self::Flush(io) => io.size as usize,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn data_size(&self) -> usize {
+        match self {
+            Self::Write(io) => io.data.len(),
+            Self::Flush(_) => 0,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Write(io) => &(io.data),
+            Self::Flush(_) => panic!("can not deref FlushIo"),
+        }
     }
 }
 
@@ -138,12 +189,12 @@ impl TgtPendingBlocksPool {
             .await.expect("unable to open replica device");
 
         for io in pending.into_iter() {
-            if io.size == 0 {
-                assert!(io.data.len() == 0);
+            if io.size() == 0 {
+                assert!(io.data_size() == 0);
                 continue;
             }
-            let offset = io.offset;
-            let buf = &(io.data);
+            let offset = io.offset();
+            let buf = io.as_ref();
             replica_dev.seek(smol::io::SeekFrom::Start(offset)).await.expect("unable to seek replica device");
             replica_dev.write_all(buf).await.expect("unable to write replica deivce");
             replica_dev.flush().await.expect("unable to flush replica deivce");
