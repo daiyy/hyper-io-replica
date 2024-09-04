@@ -48,6 +48,10 @@ pub struct IoReplicaArgs {
     #[clap(long, default_value = "1GiB")]
     pub pool_size: String,
 
+    /// local pool size, default is disable local pool
+    #[clap(long, default_value = "0")]
+    pub local_pool_size: String,
+
     /// device size, default is entire primary space
     #[clap(long)]
     pub device_size: Option<String>,
@@ -61,6 +65,7 @@ struct LoJson {
     replica_dev_path: String,
     region_size: u64,
     pool_size: u64,
+    local_pool_size: u64,
     device_size: u64,
 }
 
@@ -72,6 +77,7 @@ pub(crate) struct LoopTgt {
     pub replica_dev_path: String,
     pub region_size: u64,
     pub pool_size: u64,
+    pub local_pool_size: u64,
     pub device_size: u64,
 }
 
@@ -107,11 +113,12 @@ fn pool_append_pending(iod: &ublksrv_io_desc, force_propgate: bool) {
         let pio = PendingIo::from_iodesc(&iod);
         pool.borrow_mut().append(pio);
 
+        if force_propgate {
+            pool.borrow_mut().propagate();
+            return;
+        }
         // if we have avail mem in local pool
-        if pool.borrow().avail_capacity() >= (iod.nr_sectors << 9) as usize {
-            if force_propgate {
-                pool.borrow_mut().propagate();
-            }
+        if pool.borrow().avail_capacity() > (iod.nr_sectors << 9) as usize {
             return;
         }
         // if no enough avail mem, force propagate
@@ -291,7 +298,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, device_size: lo.device_size, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, } });
     dev.set_target_json(val);
 
     Ok(())
@@ -489,7 +496,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, device_sz) = match opt {
+    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -503,6 +510,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 o.replica.clone(),
                 o.region_size.parse::<ByteSize>().expect("unable to parse input region size").0,
                 o.pool_size.parse::<ByteSize>().expect("unable to parse input pool size").0,
+                o.local_pool_size.parse::<ByteSize>().expect("unable to parse input local pool size").0,
                 o.device_size.as_ref().map_or(0, |s| s.parse::<ByteSize>().expect("unable to parse input device size").0),
             )
         }
@@ -526,6 +534,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.replica_dev_path,
                             t.region_size,
                             t.pool_size,
+                            t.local_pool_size,
                             t.device_size,
                         ),
                         Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
@@ -549,6 +558,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         replica_dev_path: replica.clone(),
         region_size: region_sz,
         pool_size: pool_sz,
+        local_pool_size: local_pool_sz,
         device_size: device_sz,
     };
 
@@ -587,7 +597,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             q_a_fn(qid, dev)
         } else {
             // setup thread local pending blocks pool
-            let pool = LocalPendingBlocksPool::new(usize::MAX, tx);
+            let pool = LocalPendingBlocksPool::new(local_pool_sz as usize, tx);
             PENDING_BLOCKS.set(pool);
 
             // setup thread local state
