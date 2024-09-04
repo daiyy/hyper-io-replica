@@ -213,6 +213,10 @@ impl TgtPendingBlocksPool {
             if pool.borrow().pending_bytes >= pool.borrow().max_capacity {
                 debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes exceed max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
+                // TODO: change process to
+                // 1. disable logging
+                // 2. wait incoming queue empty?
+                // 3. write_to_replica
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
 
                 let replica_path = pool.borrow().replica_path.to_string();
@@ -225,6 +229,10 @@ impl TgtPendingBlocksPool {
             } else if pool.borrow().pending_bytes >= pool.borrow().max_capacity / 2 {
                 debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes exceed 1/2 max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
+                // TODO: change process to
+                // 1. add periodic flusher
+                // 2. find last FLUSH in the queue and take out, leave remains in the queue
+                // 3. write_to_replica
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
 
                 let replica_path = pool.borrow().replica_path.to_string();
