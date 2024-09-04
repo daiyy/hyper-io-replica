@@ -228,8 +228,6 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
                 libublk::sys::UBLK_IO_OP_FLUSH => {
                     if state::local_state_logging_enabled() {
                         pool_append_pending(&iod, true);
-                    } else {
-                        region::local_region_mark_dirty(&iod);
                     }
                 },
                 _ => {
