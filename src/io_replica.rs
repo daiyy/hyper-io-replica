@@ -198,6 +198,19 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
         let off = iod.start_sector << 9;
         let bytes = iod.nr_sectors << 9;
 
+        // TODO:
+        // since back storage is always "write through"
+        // we *DO NOT* need to forward FLUSH op to primary (will get -EINVAL if we do this).
+        // in the future we need to get write cache setting from primary before make decision
+        // if or not to forward FLUSH op here.
+        if op == libublk::sys::UBLK_IO_OP_FLUSH {
+            // if flush op and logging enabled, log this io and return success immediately
+            if state::local_state_logging_enabled() {
+                pool_append_pending(&iod, true);
+                return 0;
+            }
+        }
+
         let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr);
         let res = q.ublk_submit_sqe(sqe).await;
         if res != -(libc::EAGAIN) {
