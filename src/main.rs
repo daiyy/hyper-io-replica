@@ -26,6 +26,7 @@ mod state;
 mod region;
 mod recover;
 mod mgmt;
+mod device;
 
 #[derive(Parser)]
 #[command(version)]

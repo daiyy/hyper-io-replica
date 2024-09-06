@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use bytesize::ByteSize;
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 use crate::state::{LocalTgtState, GlobalTgtState};
+use crate::device;
 use crate::state;
 use crate::region;
 use crate::recover;
@@ -67,6 +68,7 @@ struct LoJson {
     pool_size: u64,
     local_pool_size: u64,
     device_size: u64,
+    raw_device_size: u64,
 }
 
 pub(crate) struct LoopTgt {
@@ -79,6 +81,8 @@ pub(crate) struct LoopTgt {
     pub pool_size: u64,
     pub local_pool_size: u64,
     pub device_size: u64,
+    pub raw_device_size: u64,
+    pub primary_device: device::PrimaryDevice,
 }
 
 std::thread_local! {
@@ -298,7 +302,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, } });
     dev.set_target_json(val);
 
     Ok(())
@@ -496,10 +500,18 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz) = match opt {
+    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz, pri_dev) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
+            let input_region_size = o.region_size.parse::<ByteSize>().expect("unable to parse input region size").0;
+            let input_device_size = o.device_size.as_ref()
+                .map_or(0, |s| s.parse::<ByteSize>().expect("unable to parse input device size").0);
+            let primary = device::PrimaryDevice::new(
+                    o.file.as_path().to_str().expect("invalid input of primary device"),
+                    input_device_size,
+                    input_region_size);
+            primary.verify();
             (
                 to_absolute_path(o.file.clone(), parent),
                 !o.buffered_io,
@@ -508,10 +520,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 Some(o.gen_arg.get_shm_id()),
                 o.gen_arg.foreground,
                 o.replica.clone(),
-                o.region_size.parse::<ByteSize>().expect("unable to parse input region size").0,
+                primary.region_size,
                 o.pool_size.parse::<ByteSize>().expect("unable to parse input pool size").0,
                 o.local_pool_size.parse::<ByteSize>().expect("unable to parse input local pool size").0,
-                o.device_size.as_ref().map_or(0, |s| s.parse::<ByteSize>().expect("unable to parse input device size").0),
+                primary.tgt_device_size,
+                input_device_size,
+                primary,
             )
         }
         None => {
@@ -524,7 +538,15 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                     let tgt_data: Result<LoJson, _> = serde_json::from_value(lo.clone());
 
                     match tgt_data {
-                        Ok(t) => (
+                        Ok(t) => {
+
+                            let primary = device::PrimaryDevice::new(
+                                    t.back_file_path.as_str(),
+                                    t.raw_device_size,
+                                    t.region_size);
+                            primary.verify();
+
+                            (
                             PathBuf::from(t.back_file_path.as_str()),
                             t.direct_io != 0,
                             (p.basic.attrs & libublk::sys::UBLK_ATTR_READ_ONLY) != 0,
@@ -536,7 +558,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.pool_size,
                             t.local_pool_size,
                             t.device_size,
-                        ),
+                            t.raw_device_size,
+                            primary
+                        )},
                         Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
                     }
                 }
@@ -560,6 +584,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         pool_size: pool_sz,
         local_pool_size: local_pool_sz,
         device_size: device_sz,
+        raw_device_size: raw_device_sz,
+        primary_device: pri_dev,
     };
 
     //todo: USER_COPY should be the default option
@@ -570,14 +596,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let tgt_state = GlobalTgtState::new();
     let g_state = tgt_state.state_clone();
 
-    let (back_file_size, _, _) = crate::ublk_file_size(&lo.back_file).unwrap();
-    if lo.device_size == 0 {
-        lo.device_size = back_file_size;
-    }
     let g_region = region::Region::new(lo.device_size, region_sz);
 
-    // reset region size with checked one
-    lo.region_size = g_region.region_size();
+    // check region size with checked one
+    assert!(lo.region_size == g_region.region_size());
 
     let g_recover_ctrl = recover::RecoverCtrl::default()
         .with_region_size(g_region.region_size())
