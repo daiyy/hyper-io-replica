@@ -1,10 +1,13 @@
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::collections::{HashMap, VecDeque};
 use smol::channel;
+use smol::io::Result;
 use smol::lock::{Mutex, RwLock};
+use smol::LocalExecutor;
+use smol::lock::Semaphore;
 use smol::fs::{OpenOptions, unix::OpenOptionsExt};
 use smol::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 use libublk::sys::ublksrv_io_desc;
@@ -14,6 +17,7 @@ use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
 
 const RECOVERY_WAIT_ON_MS: u64 = 50;
+const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub(crate) enum RecoverState {
@@ -39,6 +43,7 @@ pub(crate) struct RecoverCtrl {
     nr_regions: u64,
     inflight: Arc<AtomicU64>,
     pending: Arc<AtomicU64>,
+    concurrency: Arc<AtomicUsize>,
     tx: channel::Sender<bool>,
     rx: channel::Receiver<bool>,
 }
@@ -81,6 +86,7 @@ impl Default for RecoverCtrl {
             nr_regions: 0,
             inflight: Arc::new(AtomicU64::new(0)),
             pending: Arc::new(AtomicU64::new(0)),
+            concurrency: Arc::new(AtomicUsize::new(0)),
             tx: tx,
             rx: rx,
         }
@@ -110,6 +116,11 @@ impl RecoverCtrl {
 
     pub(crate) fn with_replica_path(mut self, path: &str) -> Self {
         self.replica_path = path.to_string();
+        self
+    }
+
+    pub(crate) fn with_concurrency(self, n: usize) -> Self {
+        self.concurrency.store(n, Ordering::SeqCst);
         self
     }
 
@@ -171,6 +182,7 @@ impl RecoverCtrl {
             nr_regions: nr_regions,
             inflight: Arc::new(AtomicU64::new(0)),
             pending: Arc::new(AtomicU64::new(nr_regions)),
+            concurrency: Arc::new(AtomicUsize::new(0)),
             tx: tx,
             rx: rx,
         }
@@ -391,7 +403,106 @@ impl RecoverCtrl {
         return;
     }
 
-    pub(crate) async fn do_recovery(&self) {
+    // copy one region
+    async fn recover_worker(inflight: Arc<AtomicU64>, pending: Arc<AtomicU64>,
+            from: String, to: String, region_id: u64, region_size: u64, region: Arc<Mutex<Region>>) -> Result<()>
+    {
+        let mut lock = region.lock().await;
+        (*lock).state = RecoverState::Recovering;
+        pending.fetch_sub(1, Ordering::SeqCst);
+        inflight.fetch_add(1, Ordering::SeqCst);
+        drop(lock);
+
+        let mut from_dev = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECT)
+            .open(from.clone())
+            .await.expect("unable to open primary device");
+        let mut to_dev = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_DIRECT)
+            .open(to.clone())
+            .await.expect("unable to open replica device");
+
+        let offset = region_size * region_id;
+        let mut buf = Vec::with_capacity(region_size as usize);
+        buf.resize(region_size as usize, 0);
+
+        from_dev.seek(smol::io::SeekFrom::Start(offset)).await
+            .unwrap_or_else(|_| panic!("unable to seek from device {from} for region id {region_id}"));
+        from_dev.read_exact(&mut buf).await
+            .unwrap_or_else(|_| panic!("unable to read from deivce {from} for region id {region_id}"));
+
+        to_dev.seek(smol::io::SeekFrom::Start(offset)).await
+            .unwrap_or_else(|_| panic!("unable to seek to device {to} for region id {region_id}"));
+        to_dev.write_all(&buf).await
+            .unwrap_or_else(|_| panic!("unable to write to deivce {to} for region id {region_id}"));
+        to_dev.flush().await
+            .unwrap_or_else(|_| panic!("unable to flush to deivce {to} for region id {region_id}"));
+
+        let mut lock = region.lock().await;
+        (*lock).state = RecoverState::Clean;
+        inflight.fetch_sub(1, Ordering::SeqCst);
+        drop(lock);
+
+        Ok(())
+    }
+
+    // main control of recover process
+    pub(crate) async fn do_recovery(&self, exec: Rc<LocalExecutor<'_>>) {
+        // prepare recover mode
+        let mode = self.mode.read_arc().await;
+        let (from, to) = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
+            (self.replica_path.clone(), self.primary_path.clone())
+        } else if *mode == state::TGT_STATE_RECOVERY_FORWARD_FULL || *mode == state::TGT_STATE_RECOVERY_FORWARD_PART {
+            (self.primary_path.clone(), self.replica_path.clone())
+        } else {
+            panic!("unkown RecoverCtrl mode {} found during kickoff recover", *mode);
+        };
+        drop(mode);
+
+        let sema = Arc::new(Semaphore::new(self.concurrency.load(Ordering::SeqCst)));
+        let region_size = self.region_size;
+        loop {
+            let guard = sema.acquire_arc().await;
+            // break recover process if received cmd is false or channel closed
+            match self.rx.try_recv() {
+                Ok(cmd) => { if !cmd { return; } },
+                Err(channel::TryRecvError::Closed) => { return; },
+                _ => {},
+            }
+
+            if let Some((region_id, region)) = self.fetch_one().await {
+                let c_from = from.to_owned();
+                let c_to = to.to_owned();
+                let c_inflight = self.inflight.clone();
+                let c_pending = self.pending.clone();
+                let c_exec = exec.clone();
+                let task = c_exec.spawn(async move {
+                    let _ = Self::recover_worker(c_inflight, c_pending, c_from, c_to, region_id, region_size, region).await;
+                    drop(guard);
+                });
+                // run task in background
+                task.detach();
+            } else {
+                break;
+            }
+        }
+
+        // nothing left in recover queue now, let's wait for all region finished
+        while self.get_inflight() > 0 || self.get_pending() > 0 {
+            smol::Timer::after(std::time::Duration::from_millis(RECOVERY_FINAL_WAIT_INTERVAL_MS)).await;
+            continue;
+        }
+        assert!(self.get_inflight() == 0 && self.get_pending() == 0);
+        // all regions recovered, clear recover state bits
+        let mut mode_lock = self.mode.write_arc().await;
+        let state = self.g_state.clear_all_recover_bits();
+        *mode_lock = state;
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn _do_recovery(&self, _exec: Rc<LocalExecutor<'_>>) {
         while let Some((region_id, region)) = self.fetch_one().await {
             let mut lock = region.lock().await;
             (*lock).state = RecoverState::Recovering;
@@ -458,11 +569,11 @@ impl RecoverCtrl {
         (self.get_inflight(), self.get_pending(), self.nr_regions)
     }
 
-    pub(crate) async fn main_loop(&self) {
+    pub(crate) async fn main_loop(&self, exec: Rc<LocalExecutor<'_>>) {
         // keep waiting on next cmd from channel
         while let Ok(cmd) = self.rx.recv().await {
             if cmd {
-                self.do_recovery().await;
+                self.do_recovery(exec.clone()).await;
             }
         }
     }

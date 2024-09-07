@@ -288,20 +288,23 @@ impl TgtPendingBlocksPool {
                 Self::periodic(c_pool).await;
             }));
 
+            let rc_exec = Rc::new(exec);
+
             let c_recover = rc_recover.clone();
-            f_vec.push(exec.spawn(async move {
-                c_recover.main_loop().await;
+            let c_exec = rc_exec.clone();
+            f_vec.push(rc_exec.spawn(async move {
+                c_recover.main_loop(c_exec).await;
             }));
 
             let cmd_chan = CommandChannel::new(unix_sock.as_path());
             let c_state = rc_state.clone();
             let c_region = rc_region.clone();
             let c_recover = rc_recover.clone();
-            f_vec.push(exec.spawn(async move {
+            f_vec.push(rc_exec.spawn(async move {
                 cmd_chan.main_handler(c_state, c_region, c_recover).await;
             }));
 
-            smol::block_on(async { loop { exec.tick().await }});
+            smol::block_on(async { loop { rc_exec.tick().await }});
         })
     }
 }

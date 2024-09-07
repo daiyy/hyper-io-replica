@@ -60,6 +60,10 @@ pub struct IoReplicaArgs {
     /// unix socket for management command channel
     #[clap(long, default_value = "./.ioreplica")]
     pub unix_socket: PathBuf,
+
+    /// recover concurrency
+    #[clap(long, default_value_t = 1)]
+    pub recover_concurrency: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,6 +78,7 @@ struct LoJson {
     local_pool_size: u64,
     device_size: u64,
     raw_device_size: u64,
+    recover_concurrency: usize,
 }
 
 pub(crate) struct LoopTgt {
@@ -89,6 +94,7 @@ pub(crate) struct LoopTgt {
     pub device_size: u64,
     pub raw_device_size: u64,
     pub primary_device: device::PrimaryDevice,
+    pub recover_concurrency: usize,
 }
 
 std::thread_local! {
@@ -308,7 +314,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, recover_concurrency: lo.recover_concurrency, } });
     dev.set_target_json(val);
 
     Ok(())
@@ -506,7 +512,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, unix_sock, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz, pri_dev) = match opt {
+    let (file, unix_sock, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz, pri_dev, recover_concurrency) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -533,6 +539,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 primary.tgt_device_size,
                 input_device_size,
                 primary,
+                o.recover_concurrency,
             )
         }
         None => {
@@ -567,7 +574,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.local_pool_size,
                             t.device_size,
                             t.raw_device_size,
-                            primary
+                            primary,
+                            t.recover_concurrency,
                         )},
                         Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
                     }
@@ -599,6 +607,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         device_size: device_sz,
         raw_device_size: raw_device_sz,
         primary_device: pri_dev,
+        recover_concurrency: recover_concurrency,
     };
 
     //todo: USER_COPY should be the default option
@@ -619,7 +628,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_nr_regions(g_region.nr_regions())
         .with_g_state(tgt_state.clone())
         .with_primary_path(&file_path)
-        .with_replica_path(&replica);
+        .with_replica_path(&replica)
+        .with_concurrency(recover_concurrency);
 
     let tgt = TgtPendingBlocksPool::new(pool_sz as usize, &replica);
     let tx = tgt.get_tx_chan();
