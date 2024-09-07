@@ -27,6 +27,7 @@ mod region;
 mod recover;
 mod mgmt;
 mod device;
+mod replica;
 
 #[derive(Parser)]
 #[command(version)]
