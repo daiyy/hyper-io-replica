@@ -1,5 +1,6 @@
 use std::rc::Rc;
 use std::collections::HashMap;
+use std::path::Path;
 use smol::net::unix::UnixListener;
 use smol::stream::StreamExt;
 use smol::io::{BufReader, AsyncWriteExt};
@@ -106,8 +107,8 @@ pub(crate) struct CommandChannel {
 }
 
 impl CommandChannel {
-    pub fn new() -> Self {
-        let listener = UnixListener::bind("/tmp/.hior_mgmt").expect("unable to bind unix sock");
+    pub fn new(unix_sock: &Path) -> Self {
+        let listener = UnixListener::bind(unix_sock).expect("unable to bind unix sock");
         Self {
             listener: listener,
         }

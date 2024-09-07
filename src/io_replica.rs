@@ -56,11 +56,16 @@ pub struct IoReplicaArgs {
     /// device size, default is entire primary space
     #[clap(long)]
     pub device_size: Option<String>,
+
+    /// unix socket for management command channel
+    #[clap(long, default_value = "./.ioreplica")]
+    pub unix_socket: PathBuf,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LoJson {
     back_file_path: String,
+    unix_sock_path: String,
     direct_io: i32,
     async_await: bool,
     replica_dev_path: String,
@@ -74,6 +79,7 @@ struct LoJson {
 pub(crate) struct LoopTgt {
     pub back_file_path: String,
     pub back_file: std::fs::File,
+    pub unix_sock_path: String,
     pub direct_io: i32,
     pub async_await: bool,
     pub replica_dev_path: String,
@@ -302,7 +308,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, } });
     dev.set_target_json(val);
 
     Ok(())
@@ -500,7 +506,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz, pri_dev) = match opt {
+    let (file, unix_sock, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz, pri_dev) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -513,7 +519,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                     input_region_size);
             primary.verify();
             (
-                to_absolute_path(o.file.clone(), parent),
+                to_absolute_path(o.file.clone(), parent.clone()),
+                to_absolute_path(o.unix_socket.clone(), parent),
                 !o.buffered_io,
                 o.gen_arg.read_only,
                 o.async_await,
@@ -548,6 +555,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
                             (
                             PathBuf::from(t.back_file_path.as_str()),
+                            PathBuf::from(t.unix_sock_path.as_str()),
                             t.direct_io != 0,
                             (p.basic.attrs & libublk::sys::UBLK_ATTR_READ_ONLY) != 0,
                             t.async_await,
@@ -570,6 +578,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     };
 
     let file_path = format!("{}", file.as_path().display());
+    let sock_path = format!("{}", unix_sock.as_path().display());
+    if unix_sock.as_path().exists() {
+        panic!("unix socket {} is alread exists", sock_path);
+    }
     let mut lo = LoopTgt {
         back_file: std::fs::OpenOptions::new()
             .read(true)
@@ -578,6 +590,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             .unwrap(),
         direct_io: i32::from(dio),
         back_file_path: file_path.clone(),
+        unix_sock_path: sock_path.clone(),
         async_await: aa,
         replica_dev_path: replica.clone(),
         region_size: region_sz,
@@ -610,7 +623,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     let tgt = TgtPendingBlocksPool::new(pool_sz as usize, &replica);
     let tx = tgt.get_tx_chan();
-    let main = tgt.start(tgt_state, g_region.clone(), g_recover_ctrl.clone());
+    let main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
     let region_shift = g_region.region_shift();
 
     ctrl.run_target(

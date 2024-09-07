@@ -1,6 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
@@ -264,8 +265,8 @@ impl TgtPendingBlocksPool {
         }
     }
 
-    pub(crate) fn start(self, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(|| {
+    pub(crate) fn start(self, unix_sock: PathBuf, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
             let mut f_vec = Vec::new();
             let exec = LocalExecutor::new();
 
@@ -292,7 +293,7 @@ impl TgtPendingBlocksPool {
                 c_recover.main_loop().await;
             }));
 
-            let cmd_chan = CommandChannel::new();
+            let cmd_chan = CommandChannel::new(unix_sock.as_path());
             let c_state = rc_state.clone();
             let c_region = rc_region.clone();
             let c_recover = rc_recover.clone();
