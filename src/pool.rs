@@ -6,13 +6,12 @@ use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
 use smol::LocalExecutor;
-use smol::fs::{OpenOptions, unix::OpenOptionsExt};
-use smol::io::{AsyncSeekExt, AsyncWriteExt};
 use log::{info, debug};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
 use crate::mgmt::CommandChannel;
+use crate::replica::Replica;
 
 pub(crate) enum PendingIo {
     Write(WriteIo),
@@ -155,8 +154,9 @@ impl LocalPendingBlocksPool {
     }
 }
 
-pub(crate) struct TgtPendingBlocksPool {
+pub(crate) struct TgtPendingBlocksPool<T> {
     replica_path: String,
+    replica_device: T,
     rx: channel::Receiver<Vec<PendingIo>>,
     tx: channel::Sender<Vec<PendingIo>>,
     pending_queue: Vec<PendingIo>,
@@ -164,8 +164,8 @@ pub(crate) struct TgtPendingBlocksPool {
     max_capacity: usize,
 }
 
-impl TgtPendingBlocksPool {
-    pub(crate) fn new(max_capacity: usize, replica_path: &str) -> Self {
+impl<T: Replica + 'static> TgtPendingBlocksPool<T> {
+    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T) -> Self {
         let (tx, rx) = channel::unbounded();
         Self {
             rx: rx,
@@ -174,6 +174,7 @@ impl TgtPendingBlocksPool {
             pending_bytes: 0,
             max_capacity: max_capacity,
             replica_path: replica_path.to_string(),
+            replica_device: replica_device,
         }
     }
 
@@ -181,32 +182,12 @@ impl TgtPendingBlocksPool {
         self.tx.clone()
     }
 
-    async fn write_to_replica(replica_path: String, pending: Vec<PendingIo>) {
-
-        let mut replica_dev = OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(replica_path)
-            .await.expect("unable to open replica device");
-
-        for io in pending.into_iter() {
-            if io.size() == 0 {
-                assert!(io.data_size() == 0);
-                continue;
-            }
-            let offset = io.offset();
-            let buf = io.as_ref();
-            replica_dev.seek(smol::io::SeekFrom::Start(offset)).await.expect("unable to seek replica device");
-            replica_dev.write_all(buf).await.expect("unable to write replica deivce");
-            replica_dev.flush().await.expect("unable to flush replica deivce");
-        }
-    }
-
     pub(crate) async fn main_loop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, _recover: Rc<RecoverCtrl>) {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
         info!("  - region {:?}", region);
         let rx = pool.borrow().rx.clone();
+        let replica_device = pool.borrow().replica_device.dup().await;
         while let Ok(mut v) = rx.recv().await {
             let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
             pool.borrow_mut().pending_bytes += total_bytes;
@@ -220,8 +201,7 @@ impl TgtPendingBlocksPool {
                 // 3. write_to_replica
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
 
-                let replica_path = pool.borrow().replica_path.to_string();
-                Self::write_to_replica(replica_path, pending).await;
+                let _ = replica_device.log_pending_io(pending).await;
 
                 state.set_logging_disable();
 
@@ -236,8 +216,7 @@ impl TgtPendingBlocksPool {
                 // 3. write_to_replica
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
 
-                let replica_path = pool.borrow().replica_path.to_string();
-                Self::write_to_replica(replica_path, pending).await;
+                let _ = replica_device.log_pending_io(pending).await;
 
                 pool.borrow_mut().pending_queue = Vec::new();
                 pool.borrow_mut().pending_bytes = 0;
@@ -247,6 +226,8 @@ impl TgtPendingBlocksPool {
     }
 
     pub(crate) async fn periodic(pool: Rc<RefCell<Self>>) {
+        // create a dedicate intance of replica deivce instance
+        let replica_device = pool.borrow().replica_device.dup().await;
         loop {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
             let pending_bytes = pool.borrow().pending_bytes;
@@ -256,8 +237,7 @@ impl TgtPendingBlocksPool {
                     pending_queue_len, pending_bytes);
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
 
-                let replica_path = pool.borrow().replica_path.to_string();
-                Self::write_to_replica(replica_path, pending).await;
+                let _ = replica_device.log_pending_io(pending).await;
 
                 pool.borrow_mut().pending_queue = Vec::new();
                 pool.borrow_mut().pending_bytes = 0;

@@ -19,6 +19,7 @@ use crate::device;
 use crate::state;
 use crate::region;
 use crate::recover;
+use crate::replica::{Replica, file::FileReplica};
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -631,7 +632,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_replica_path(&replica)
         .with_concurrency(recover_concurrency);
 
-    let tgt = TgtPendingBlocksPool::new(pool_sz as usize, &replica);
+    let replica_device = smol::block_on(async {
+        FileReplica::new(&replica).await
+    });
+    let tgt = TgtPendingBlocksPool::new(pool_sz as usize, &replica, replica_device);
     let tx = tgt.get_tx_chan();
     let main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
     let region_shift = g_region.region_shift();

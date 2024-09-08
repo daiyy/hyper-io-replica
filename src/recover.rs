@@ -15,6 +15,8 @@ use crate::state::GlobalTgtState;
 use crate::state;
 use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
+use crate::replica::{Replica, ReplicaDevice};
+use crate::replica::{file::FileReplica, s3::S3Replica};
 
 const RECOVERY_WAIT_ON_MS: u64 = 50;
 const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
@@ -404,8 +406,9 @@ impl RecoverCtrl {
     }
 
     // copy one region
-    async fn recover_worker(inflight: Arc<AtomicU64>, pending: Arc<AtomicU64>,
-            from: String, to: String, region_id: u64, region_size: u64, region: Arc<Mutex<Region>>) -> Result<()>
+    async fn recover_worker<T: Replica>(inflight: Arc<AtomicU64>, pending: Arc<AtomicU64>,
+            primary: String, replica: ReplicaDevice<T>, forward: bool,
+            region_id: u64, region_size: u64, region: Arc<Mutex<Region>>) -> Result<()>
     {
         let mut lock = region.lock().await;
         (*lock).state = RecoverState::Recovering;
@@ -413,32 +416,33 @@ impl RecoverCtrl {
         inflight.fetch_add(1, Ordering::SeqCst);
         drop(lock);
 
-        let mut from_dev = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(from.clone())
-            .await.expect("unable to open primary device");
-        let mut to_dev = OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(to.clone())
-            .await.expect("unable to open replica device");
+        let mut primary_dev = if forward {
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(&primary)
+                .await.expect("unable to open primary device")
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(&primary)
+                .await.expect("unable to open primary device")
+        };
 
         let offset = region_size * region_id;
         let mut buf = Vec::with_capacity(region_size as usize);
         buf.resize(region_size as usize, 0);
 
-        from_dev.seek(smol::io::SeekFrom::Start(offset)).await
-            .unwrap_or_else(|_| panic!("unable to seek from device {from} for region id {region_id}"));
-        from_dev.read_exact(&mut buf).await
-            .unwrap_or_else(|_| panic!("unable to read from deivce {from} for region id {region_id}"));
-
-        to_dev.seek(smol::io::SeekFrom::Start(offset)).await
-            .unwrap_or_else(|_| panic!("unable to seek to device {to} for region id {region_id}"));
-        to_dev.write_all(&buf).await
-            .unwrap_or_else(|_| panic!("unable to write to deivce {to} for region id {region_id}"));
-        to_dev.flush().await
-            .unwrap_or_else(|_| panic!("unable to flush to deivce {to} for region id {region_id}"));
+        if forward {
+            primary_dev.seek(smol::io::SeekFrom::Start(offset)).await?;
+            primary_dev.read_exact(&mut buf).await?;
+            replica.inner.write(offset, &buf).await?;
+        } else {
+            replica.inner.read(offset, &mut buf).await?;
+            primary_dev.seek(smol::io::SeekFrom::Start(offset)).await?;
+            primary_dev.write_all(&buf).await?;
+        }
 
         let mut lock = region.lock().await;
         (*lock).state = RecoverState::Clean;
@@ -452,10 +456,10 @@ impl RecoverCtrl {
     pub(crate) async fn do_recovery(&self, exec: Rc<LocalExecutor<'_>>) {
         // prepare recover mode
         let mode = self.mode.read_arc().await;
-        let (from, to) = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
-            (self.replica_path.clone(), self.primary_path.clone())
+        let forward = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
+            false
         } else if *mode == state::TGT_STATE_RECOVERY_FORWARD_FULL || *mode == state::TGT_STATE_RECOVERY_FORWARD_PART {
-            (self.primary_path.clone(), self.replica_path.clone())
+            true
         } else {
             panic!("unkown RecoverCtrl mode {} found during kickoff recover", *mode);
         };
@@ -473,13 +477,15 @@ impl RecoverCtrl {
             }
 
             if let Some((region_id, region)) = self.fetch_one().await {
-                let c_from = from.to_owned();
-                let c_to = to.to_owned();
+                let c_primary = self.primary_path.to_owned();
+                let c_replica = ReplicaDevice::<FileReplica>::from_path(self.replica_path.as_str()).await;
                 let c_inflight = self.inflight.clone();
                 let c_pending = self.pending.clone();
                 let c_exec = exec.clone();
                 let task = c_exec.spawn(async move {
-                    let _ = Self::recover_worker(c_inflight, c_pending, c_from, c_to, region_id, region_size, region).await;
+                    let _ = Self::recover_worker(c_inflight, c_pending,
+                        c_primary, c_replica, forward,
+                        region_id, region_size, region).await;
                     drop(guard);
                 });
                 // run task in background
