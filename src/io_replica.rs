@@ -19,7 +19,7 @@ use crate::device;
 use crate::state;
 use crate::region;
 use crate::recover;
-use crate::replica::{Replica, file::FileReplica};
+use crate::replica::{Replica, file::FileReplica, s3::S3Replica};
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -587,12 +587,21 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     };
 
     // init replica device and check it's size
-    let replica_device = smol::block_on(async {
-        FileReplica::new(&replica).await
+    let (s3_replica_device, file_replica_device, replica_device_size) = smol::block_on(async {
+        if replica.starts_with("s3://") || replica.starts_with("S3://") {
+            let device = S3Replica::init(&replica);
+            let sz = device.size();
+            return (Some(device), None, sz);
+        } else {
+            let device = FileReplica::new(&replica).await;
+            let sz = device.size();
+            return (None, Some(device), sz);
+        };
     });
-    if replica_device.size() < raw_device_sz {
+
+    if replica_device_size < raw_device_sz {
         panic!("replica device do NOT have enough space, raw device size need {}, actually replica device size {}",
-            raw_device_sz, replica_device.size());
+            raw_device_sz, replica_device_size);
     }
 
     let file_path = format!("{}", file.as_path().display());
@@ -641,9 +650,17 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_replica_path(&replica)
         .with_concurrency(recover_concurrency);
 
-    let tgt = TgtPendingBlocksPool::new(pool_sz as usize, &replica, replica_device);
-    let tx = tgt.get_tx_chan();
-    let main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
+    let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
+        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap());
+        let _tx = tgt.get_tx_chan();
+        let _main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
+        (_tx, _main)
+    } else {
+        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap());
+        let _tx = tgt.get_tx_chan();
+        let _main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
+        (_tx, _main)
+    };
     let region_shift = g_region.region_shift();
 
     ctrl.run_target(

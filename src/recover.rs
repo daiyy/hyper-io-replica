@@ -453,7 +453,7 @@ impl RecoverCtrl {
     }
 
     // main control of recover process
-    pub(crate) async fn do_recovery(&self, exec: Rc<LocalExecutor<'_>>) {
+    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, exec: Rc<LocalExecutor<'a>>) {
         // prepare recover mode
         let mode = self.mode.read_arc().await;
         let forward = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
@@ -465,7 +465,8 @@ impl RecoverCtrl {
         };
         drop(mode);
 
-        let replica = ReplicaDevice::<FileReplica>::from_path(self.replica_path.as_str()).await;
+        let replica = ReplicaDevice::<T>::from_path(self.replica_path.as_str()).await;
+
         let sema = Arc::new(Semaphore::new(self.concurrency.load(Ordering::SeqCst)));
         let region_size = self.region_size;
         loop {
@@ -580,7 +581,12 @@ impl RecoverCtrl {
         // keep waiting on next cmd from channel
         while let Ok(cmd) = self.rx.recv().await {
             if cmd {
-                self.do_recovery(exec.clone()).await;
+                let replica = self.replica_path.as_str();
+                if replica.starts_with("s3://") || replica.starts_with("S3://") {
+                    self.do_recovery::<S3Replica>(exec.clone()).await;
+                } else {
+                    self.do_recovery::<FileReplica>(exec.clone()).await;
+                };
             }
         }
     }
