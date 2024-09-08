@@ -586,6 +586,15 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         }
     };
 
+    // init replica device and check it's size
+    let replica_device = smol::block_on(async {
+        FileReplica::new(&replica).await
+    });
+    if replica_device.size() < raw_device_sz {
+        panic!("replica device do NOT have enough space, raw device size need {}, actually replica device size {}",
+            raw_device_sz, replica_device.size());
+    }
+
     let file_path = format!("{}", file.as_path().display());
     let sock_path = format!("{}", unix_sock.as_path().display());
     if unix_sock.as_path().exists() {
@@ -632,9 +641,6 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_replica_path(&replica)
         .with_concurrency(recover_concurrency);
 
-    let replica_device = smol::block_on(async {
-        FileReplica::new(&replica).await
-    });
     let tgt = TgtPendingBlocksPool::new(pool_sz as usize, &replica, replica_device);
     let tx = tgt.get_tx_chan();
     let main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
