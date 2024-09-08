@@ -407,7 +407,7 @@ impl RecoverCtrl {
 
     // copy one region
     async fn recover_worker<T: Replica>(inflight: Arc<AtomicU64>, pending: Arc<AtomicU64>,
-            primary: String, replica: ReplicaDevice<T>, forward: bool,
+            primary: String, replica: T, forward: bool,
             region_id: u64, region_size: u64, region: Arc<Mutex<Region>>) -> Result<()>
     {
         let mut lock = region.lock().await;
@@ -437,9 +437,9 @@ impl RecoverCtrl {
         if forward {
             primary_dev.seek(smol::io::SeekFrom::Start(offset)).await?;
             primary_dev.read_exact(&mut buf).await?;
-            replica.inner.write(offset, &buf).await?;
+            replica.write(offset, &buf).await?;
         } else {
-            replica.inner.read(offset, &mut buf).await?;
+            replica.read(offset, &mut buf).await?;
             primary_dev.seek(smol::io::SeekFrom::Start(offset)).await?;
             primary_dev.write_all(&buf).await?;
         }
@@ -465,6 +465,7 @@ impl RecoverCtrl {
         };
         drop(mode);
 
+        let replica = ReplicaDevice::<FileReplica>::from_path(self.replica_path.as_str()).await;
         let sema = Arc::new(Semaphore::new(self.concurrency.load(Ordering::SeqCst)));
         let region_size = self.region_size;
         loop {
@@ -478,7 +479,7 @@ impl RecoverCtrl {
 
             if let Some((region_id, region)) = self.fetch_one().await {
                 let c_primary = self.primary_path.to_owned();
-                let c_replica = ReplicaDevice::<FileReplica>::from_path(self.replica_path.as_str()).await;
+                let c_replica = replica.inner.dup().await;
                 let c_inflight = self.inflight.clone();
                 let c_pending = self.pending.clone();
                 let c_exec = exec.clone();
