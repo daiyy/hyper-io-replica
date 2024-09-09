@@ -3,7 +3,10 @@ use std::future::Future;
 use crate::pool::PendingIo;
 
 pub(crate) mod file;
+#[cfg(feature="blocking")]
 pub(crate) mod s3;
+#[cfg(feature="reactor")]
+pub(crate) mod s3_reactor;
 
 pub trait Replica: Sized + Send {
     fn new(dev_path: &str) -> impl std::future::Future<Output = Self>;

@@ -19,7 +19,11 @@ use crate::device;
 use crate::state;
 use crate::region;
 use crate::recover;
-use crate::replica::{Replica, file::FileReplica, s3::S3Replica};
+use crate::replica::{Replica, file::FileReplica};
+#[cfg(feature="blocking")]
+use crate::replica::s3::S3Replica;
+#[cfg(feature="reactor")]
+use crate::replica::s3_reactor::S3Replica;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {

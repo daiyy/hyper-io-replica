@@ -32,6 +32,9 @@ aws-config = { version = "1.1.7", features = ["behavior-version-latest"], option
 aws-sdk-s3 = { version = "1.22.0", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 s3-hyperfile = { version = "0.3.0", path = "../s3-hyperfile", optional = true }
+reactor = { version = "0.1.0", path = "../reactor", optional = true }
 
 [features]
-default = ["dep:s3-hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
+blocking = ["dep:s3-hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
+reactor = ["dep:reactor", "dep:s3-hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
+default = ["reactor"]
