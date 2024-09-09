@@ -272,8 +272,10 @@ impl<T: Replica + 'static> TgtPendingBlocksPool<T> {
 
             let c_recover = rc_recover.clone();
             let c_exec = rc_exec.clone();
+            let c_pool = rc_pool.clone();
             f_vec.push(rc_exec.spawn(async move {
-                c_recover.main_loop(c_exec).await;
+                let replica = c_pool.borrow().replica_device.dup().await;
+                c_recover.main_loop(replica, c_exec).await;
             }));
 
             let cmd_chan = CommandChannel::new(unix_sock.as_path());

@@ -15,8 +15,7 @@ use crate::state::GlobalTgtState;
 use crate::state;
 use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
-use crate::replica::{Replica, ReplicaDevice};
-use crate::replica::{file::FileReplica, s3::S3Replica};
+use crate::replica::Replica;
 
 const RECOVERY_WAIT_ON_MS: u64 = 50;
 const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
@@ -453,7 +452,7 @@ impl RecoverCtrl {
     }
 
     // main control of recover process
-    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, exec: Rc<LocalExecutor<'a>>) {
+    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, replica: T, exec: Rc<LocalExecutor<'a>>) {
         // prepare recover mode
         let mode = self.mode.read_arc().await;
         let forward = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
@@ -464,8 +463,6 @@ impl RecoverCtrl {
             panic!("unkown RecoverCtrl mode {} found during kickoff recover", *mode);
         };
         drop(mode);
-
-        let replica = ReplicaDevice::<T>::from_path(self.replica_path.as_str()).await;
 
         let sema = Arc::new(Semaphore::new(self.concurrency.load(Ordering::SeqCst)));
         let region_size = self.region_size;
@@ -480,7 +477,7 @@ impl RecoverCtrl {
 
             if let Some((region_id, region)) = self.fetch_one().await {
                 let c_primary = self.primary_path.to_owned();
-                let c_replica = replica.inner.dup().await;
+                let c_replica = replica.dup().await;
                 let c_inflight = self.inflight.clone();
                 let c_pending = self.pending.clone();
                 let c_exec = exec.clone();
@@ -577,16 +574,11 @@ impl RecoverCtrl {
         (self.get_inflight(), self.get_pending(), self.nr_regions)
     }
 
-    pub(crate) async fn main_loop(&self, exec: Rc<LocalExecutor<'_>>) {
+    pub(crate) async fn main_loop<'a, 'b, T: Replica + 'a + 'b>(&self, replica: T, exec: Rc<LocalExecutor<'b>>) {
         // keep waiting on next cmd from channel
         while let Ok(cmd) = self.rx.recv().await {
             if cmd {
-                let replica = self.replica_path.as_str();
-                if replica.starts_with("s3://") || replica.starts_with("S3://") {
-                    self.do_recovery::<S3Replica>(exec.clone()).await;
-                } else {
-                    self.do_recovery::<FileReplica>(exec.clone()).await;
-                };
+                self.do_recovery(replica.dup().await, exec.clone()).await;
             }
         }
     }

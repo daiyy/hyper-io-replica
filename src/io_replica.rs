@@ -589,7 +589,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     // init replica device and check it's size
     let (s3_replica_device, file_replica_device, replica_device_size) = smol::block_on(async {
         if replica.starts_with("s3://") || replica.starts_with("S3://") {
-            let device = S3Replica::init(&replica);
+            let device = S3Replica::new(&replica).await;
             let sz = device.size();
             return (Some(device), None, sz);
         } else {

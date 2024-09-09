@@ -1,6 +1,5 @@
 use std::io::Result;
 use std::sync::Arc;
-use std::pin::Pin;
 use smol::lock::RwLock;
 use tokio::runtime;
 use super::Replica;
@@ -42,7 +41,11 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn dup(&self) -> Self {
-        todo!();
+        Self {
+            device_path: self.device_path.to_owned(),
+            file: self.file.clone(),
+            rt: self.rt.clone(),
+        }
     }
 
     #[inline]
@@ -52,11 +55,27 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
-        todo!();
+        let rt = self.rt.clone();
+        let hyper = self.file.clone();
+        let b = unsafe { std::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, buf.len()) };
+        smol::unblock(move || {
+            rt.block_on(async {
+                let mut lock = hyper.write().await;
+                lock.fs_read(b, offset as usize).await
+            })
+        }).await
     }
 
     async fn write(&self, offset: u64, buf: &[u8]) -> Result<usize> {
-        todo!();
+        let rt = self.rt.clone();
+        let hyper = self.file.clone();
+        let b = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
+        smol::unblock(move || {
+            rt.block_on(async {
+                let mut lock = hyper.write().await;
+                lock.fs_write(b, offset as usize).await
+            })
+        }).await
     }
 
     async fn flush(&self) -> Result<u64> {
@@ -68,6 +87,16 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>) -> Result<()> {
+        for io in pending.into_iter() {
+            if io.size() == 0 {
+                assert!(io.data_size() == 0);
+                continue;
+            }
+            let offset = io.offset();
+            let buf = io.as_ref();
+            self.write(offset, buf).await.expect("unable to write replica deivce");
+        }
+        self.flush().await.expect("unable to flush replica deivce");
         Ok(())
     }
 }

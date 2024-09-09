@@ -15,14 +15,3 @@ pub trait Replica: Sized + Send {
     fn close(&self) -> impl Future<Output = Result<u64>>;
     fn log_pending_io(&self, pending: Vec<PendingIo>) -> impl Future<Output = Result<()>>;
 }
-
-pub(crate) struct ReplicaDevice<T> {
-    pub(crate) inner: T,
-}
-
-impl<T: Replica> ReplicaDevice<T> {
-    pub(crate) async fn from_path(dev_path: &str) -> Self {
-        let t = T::new(dev_path).await;
-        Self { inner: t }
-    }
-}
