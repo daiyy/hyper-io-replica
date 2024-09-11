@@ -126,6 +126,7 @@ impl CommandChannel {
             match cmd.execute(state.clone(), region.clone(), recover.clone()).await {
                 Some(resp) => {
                     let _ = stream.write_all(resp.as_bytes()).await;
+                    let _ = stream.write(b"\0").await;
                 },
                 None => {},
             }
