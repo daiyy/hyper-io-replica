@@ -12,7 +12,7 @@ use crate::recover::RecoverCtrl;
 
 #[derive(Debug)]
 #[derive(Serialize, Deserialize)]
-enum CommandOp {
+pub enum CommandOp {
     Mode,
     Region,
     Recover,
@@ -20,14 +20,14 @@ enum CommandOp {
 
 #[derive(Debug)]
 #[derive(Serialize, Deserialize)]
-enum CommandDir {
+pub enum CommandDir {
     Get,
     Set,
 }
 
 #[derive(Debug)]
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Command {
+pub struct Command {
     op: CommandOp,
     dir: CommandDir,
     params: HashMap<String, serde_json::Value>,
