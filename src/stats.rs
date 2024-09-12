@@ -27,7 +27,7 @@ pub struct StatsCollection {
     recover: RecoverStats,
 }
 
-struct Stats<T> {
+pub(crate) struct Stats<T> {
     global: Global<T>,
 }
 
