@@ -282,8 +282,9 @@ impl<T: Replica + 'static> TgtPendingBlocksPool<T> {
             let c_state = rc_state.clone();
             let c_region = rc_region.clone();
             let c_recover = rc_recover.clone();
+            let c_pool = rc_pool.clone();
             f_vec.push(rc_exec.spawn(async move {
-                cmd_chan.main_handler(c_state, c_region, c_recover).await;
+                cmd_chan.main_handler(c_state, c_region, c_recover, c_pool).await;
             }));
 
             smol::block_on(async { loop { rc_exec.tick().await }});

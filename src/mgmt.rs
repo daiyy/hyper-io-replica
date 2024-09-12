@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use smol::net::unix::UnixListener;
@@ -9,6 +10,38 @@ use serde::{Serialize, Deserialize};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
+use crate::pool::TgtPendingBlocksPool;
+
+pub(crate) struct Global<T> {
+    state: Rc<GlobalTgtState>,
+    region: Rc<Region>,
+    recover: Rc<RecoverCtrl>,
+    pool: Rc<RefCell<TgtPendingBlocksPool<T>>>,
+}
+
+impl<T> Clone for Global<T> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            region: self.region.clone(),
+            recover: self.recover.clone(),
+            pool: self.pool.clone(),
+        }
+    }
+}
+
+impl<T> Global<T> {
+    fn new(g_state: Rc<GlobalTgtState>, g_region: Rc<Region>,
+        g_recover: Rc<RecoverCtrl>, g_pool: Rc<RefCell<TgtPendingBlocksPool<T>>>) -> Self
+    {
+        Self {
+            state: g_state,
+            region: g_region,
+            recover: g_recover,
+            pool: g_pool,
+        }
+    }
+}
 
 #[derive(Debug)]
 #[derive(Serialize, Deserialize)]
@@ -34,7 +67,10 @@ pub struct Command {
 }
 
 impl Command {
-    pub async fn execute(self, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) -> Option<String> {
+    pub async fn execute<T>(self, global: Global<T>) -> Option<String> {
+        let state = global.state.clone();
+        let recover = global.recover.clone();
+        let region = global.region.clone();
         match self.op {
             CommandOp::Mode => {
                 match self.dir {
@@ -114,7 +150,10 @@ impl CommandChannel {
         }
     }
 
-    pub async fn main_handler(&self, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {
+    pub async fn main_handler<T>(&self, state: Rc<GlobalTgtState>, region: Rc<Region>,
+            recover: Rc<RecoverCtrl>, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>)
+    {
+        let global = Global::new(state.clone(), region.clone(), recover.clone(), pool.clone());
         let mut incoming = self.listener.incoming();
         while let Some(stream) = incoming.next().await {
             let mut stream = stream.expect("failed to get unix stream");
@@ -123,7 +162,7 @@ impl CommandChannel {
             let _ = reader.read_until(b'\0', &mut buf_in).await;
             buf_in.pop(); // remove tailing \0
             let cmd: Command = serde_json::from_slice(&buf_in).expect("unable to deser Command bytes");
-            match cmd.execute(state.clone(), region.clone(), recover.clone()).await {
+            match cmd.execute(global.clone()).await {
                 Some(resp) => {
                     let _ = stream.write_all(resp.as_bytes()).await;
                     let _ = stream.write(b"\0").await;
