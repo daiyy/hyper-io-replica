@@ -174,6 +174,11 @@ impl CommandChannel {
             let mut buf_in = Vec::new();
             let _ = reader.read_until(b'\0', &mut buf_in).await;
             buf_in.pop(); // remove tailing \0
+            if buf_in.len() == 0 {
+                // EOF received
+                stream.shutdown(smol::net::Shutdown::Both).expect("failed to close stream");
+                continue;
+            }
             let cmd: Command = serde_json::from_slice(&buf_in).expect("unable to deser Command bytes");
             match cmd.execute(global.clone()).await {
                 Some(resp) => {
