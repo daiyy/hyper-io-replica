@@ -11,6 +11,7 @@ use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
 use crate::pool::TgtPendingBlocksPool;
+use crate::stats::Stats;
 
 pub(crate) struct Global<T> {
     pub(crate) state: Rc<GlobalTgtState>,
@@ -49,6 +50,7 @@ pub enum CommandOp {
     Mode,
     Region,
     Recover,
+    Stat,
 }
 
 #[derive(Debug)]
@@ -130,6 +132,17 @@ impl Command {
                         return Some(format!("mode: {}, inflight/pending/total {}/{}/{}", mode, inflight, pending, total));
                     },
                     CommandDir::Set => {
+                    },
+                }
+            },
+            CommandOp::Stat => {
+                match self.dir {
+                    CommandDir::Get => {
+                        let stats = Stats::new(global).collect();
+                        return Some(serde_json::to_string(&stats).expect("failed to encode stat to json string"));
+                    },
+                    CommandDir::Set => {
+                        return None;
                     },
                 }
             },
