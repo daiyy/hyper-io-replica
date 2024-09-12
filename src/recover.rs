@@ -11,6 +11,7 @@ use smol::lock::Semaphore;
 use smol::fs::{OpenOptions, unix::OpenOptionsExt};
 use smol::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 use libublk::sys::ublksrv_io_desc;
+use serde_repr::*;
 use crate::state::GlobalTgtState;
 use crate::state;
 use crate::region;
@@ -20,12 +21,13 @@ use crate::replica::Replica;
 const RECOVERY_WAIT_ON_MS: u64 = 50;
 const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
 
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug, Clone, Copy)]
+#[repr(u8)]
 pub(crate) enum RecoverState {
-    NoSync,     // not yet sync
-    Recovering, // doing recovery
-    Clean,      // in synced
-    Dirty,      // new write after synced
+    NoSync      = 0, // not yet sync
+    Recovering  = 1, // doing recovery
+    Clean       = 2, // in synced
+    Dirty       = 3, // new write after synced
 }
 
 pub(crate) struct Region {
@@ -572,6 +574,22 @@ impl RecoverCtrl {
     // return (inflight, pending, total)
     pub(crate) fn stat(&self) -> (u64, u64, u64) {
         (self.get_inflight(), self.get_pending(), self.nr_regions)
+    }
+
+    // vec of region and it's recover state
+    pub(crate) fn stat_region_map(&self) -> Vec<(u64, RecoverState)> {
+        let regions = self.region_map.clone();
+        let v = smol::block_on(async move {
+            let mut vec = Vec::new();
+            for (id, region) in regions.read_arc().await.iter() {
+                let lock = region.lock_arc().await;
+                let state = lock.state;
+                drop(lock);
+                vec.push((*id, state));
+            }
+            vec
+        });
+        v
     }
 
     pub(crate) async fn main_loop<'a, 'b, T: Replica + 'a + 'b>(&self, replica: T, exec: Rc<LocalExecutor<'b>>) {

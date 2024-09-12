@@ -28,6 +28,7 @@ mod recover;
 mod mgmt;
 mod device;
 mod replica;
+mod stats;
 
 #[derive(Parser)]
 #[command(version)]

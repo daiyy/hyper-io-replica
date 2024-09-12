@@ -13,10 +13,10 @@ use crate::recover::RecoverCtrl;
 use crate::pool::TgtPendingBlocksPool;
 
 pub(crate) struct Global<T> {
-    state: Rc<GlobalTgtState>,
-    region: Rc<Region>,
-    recover: Rc<RecoverCtrl>,
-    pool: Rc<RefCell<TgtPendingBlocksPool<T>>>,
+    pub(crate) state: Rc<GlobalTgtState>,
+    pub(crate) region: Rc<Region>,
+    pub(crate) recover: Rc<RecoverCtrl>,
+    pub(crate) pool: Rc<RefCell<TgtPendingBlocksPool<T>>>,
 }
 
 impl<T> Clone for Global<T> {
