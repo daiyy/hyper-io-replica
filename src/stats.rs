@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 use serde::{Serialize, Deserialize};
 use crate::recover::RecoverState;
 use crate::mgmt::Global;
+use crate::state;
 
 #[derive(Serialize, Deserialize)]
 pub struct RegionStats {
@@ -51,7 +52,14 @@ impl<T> Stats<T> {
 
         // recover
         let (i, p, n) = self.global.recover.stat();
-        let map = self.global.recover.stat_region_map();
+        let mask = state::TGT_STATE_RECOVERY_FORWARD_FULL |
+            state::TGT_STATE_RECOVERY_FORWARD_PART |
+            state::TGT_STATE_RECOVERY_REVERSE_FULL;
+        let map = if state & mask > 0 {
+            self.global.recover.stat_region_map()
+        } else {
+            Vec::new()
+        };
         let recover = RecoverStats {
             inflight: i,
             pending: p,
