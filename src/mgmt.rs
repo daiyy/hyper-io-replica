@@ -2,7 +2,8 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use smol::net::unix::UnixListener;
+use smol::LocalExecutor;
+use smol::net::unix::{UnixListener, UnixStream};
 use smol::stream::StreamExt;
 use smol::io::{BufReader, AsyncWriteExt};
 use smol::io::AsyncBufReadExt;
@@ -163,13 +164,24 @@ impl CommandChannel {
         }
     }
 
-    pub async fn main_handler<T>(&self, state: Rc<GlobalTgtState>, region: Rc<Region>,
-            recover: Rc<RecoverCtrl>, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>)
+    pub async fn main_handler<'a, T: 'a>(&self, state: Rc<GlobalTgtState>, region: Rc<Region>,
+            recover: Rc<RecoverCtrl>, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'a>>)
     {
         let global = Global::new(state.clone(), region.clone(), recover.clone(), pool.clone());
         let mut incoming = self.listener.incoming();
         while let Some(stream) = incoming.next().await {
-            let mut stream = stream.expect("failed to get unix stream");
+            let stream = stream.expect("failed to get unix stream");
+            let c_global = global.clone();
+            let task = exec.spawn(async move {
+                Self::cmd_handler(stream, c_global).await;
+            });
+            task.detach();
+        }
+    }
+
+    // handle command stream in loop until EOF received
+    pub async fn cmd_handler<T>(mut stream: UnixStream, global: Global<T>) {
+        loop {
             let mut reader = BufReader::new(stream.clone());
             let mut buf_in = Vec::new();
             let _ = reader.read_until(b'\0', &mut buf_in).await;
@@ -177,7 +189,7 @@ impl CommandChannel {
             if buf_in.len() == 0 {
                 // EOF received
                 stream.shutdown(smol::net::Shutdown::Both).expect("failed to close stream");
-                continue;
+                return;
             }
             let cmd: Command = serde_json::from_slice(&buf_in).expect("unable to deser Command bytes");
             match cmd.execute(global.clone()).await {
