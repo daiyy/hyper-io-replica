@@ -2,7 +2,14 @@ use std::sync::atomic::Ordering;
 use serde::{Serialize, Deserialize};
 use crate::recover::RecoverState;
 use crate::mgmt::Global;
+use crate::replica::Replica;
 use crate::state;
+
+#[derive(Serialize, Deserialize)]
+pub struct PoolStats {
+    pending_bytes: usize,
+    max_capacity: usize,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct RegionStats {
@@ -26,6 +33,7 @@ pub struct StatsCollection {
     state: u64,
     region: RegionStats,
     recover: RecoverStats,
+    pool: PoolStats,
 }
 
 pub(crate) struct Stats<T> {
@@ -67,10 +75,19 @@ impl<T> Stats<T> {
             map: map,
         };
 
+        // pool
+        let pool = self.global.pool.borrow();
+        let (p, m) = pool.get_stats();
+        let pool = PoolStats {
+            pending_bytes: p,
+            max_capacity: m,
+        };
+
         StatsCollection {
             state: state,
             region: region,
             recover: recover,
+            pool: pool,
         }
     }
 }

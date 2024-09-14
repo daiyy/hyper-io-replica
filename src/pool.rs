@@ -164,8 +164,10 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     max_capacity: usize,
 }
 
-impl<T: Replica + 'static> TgtPendingBlocksPool<T> {
-    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T) -> Self {
+impl<T> TgtPendingBlocksPool<T> {
+    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T) -> Self
+        where T: Replica + 'static
+    {
         let (tx, rx) = channel::unbounded();
         Self {
             rx: rx,
@@ -178,11 +180,18 @@ impl<T: Replica + 'static> TgtPendingBlocksPool<T> {
         }
     }
 
+    pub(crate) fn get_stats(&self) -> (usize, usize) {
+        (self.pending_bytes, self.max_capacity)
+    }
+
     pub(crate) fn get_tx_chan(&self) -> channel::Sender<Vec<PendingIo>> {
         self.tx.clone()
     }
 
-    pub(crate) async fn main_loop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, _recover: Rc<RecoverCtrl>) {
+    pub(crate) async fn main_loop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>,
+            region: Rc<Region>, _recover: Rc<RecoverCtrl>)
+        where T: Replica + 'static
+    {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
         info!("  - region {:?}", region);
@@ -225,7 +234,9 @@ impl<T: Replica + 'static> TgtPendingBlocksPool<T> {
         info!("TgtPendingBlocksPool quit");
     }
 
-    pub(crate) async fn periodic(pool: Rc<RefCell<Self>>) {
+    pub(crate) async fn periodic(pool: Rc<RefCell<Self>>)
+        where T: Replica + 'static
+    {
         // create a dedicate intance of replica deivce instance
         let replica_device = pool.borrow().replica_device.dup().await;
         loop {
@@ -245,7 +256,9 @@ impl<T: Replica + 'static> TgtPendingBlocksPool<T> {
         }
     }
 
-    pub(crate) fn start(self, unix_sock: PathBuf, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()> {
+    pub(crate) fn start(self, unix_sock: PathBuf, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()>
+        where T: Replica + 'static
+    {
         std::thread::spawn(move || {
             let mut f_vec = Vec::new();
             let exec = LocalExecutor::new();
