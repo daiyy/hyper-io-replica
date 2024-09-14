@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
+use log::warn;
 use smol::LocalExecutor;
 use smol::net::unix::{UnixListener, UnixStream};
 use smol::stream::StreamExt;
@@ -84,6 +85,11 @@ impl Command {
                         if let Some(mode) = self.params.get("mode") {
                             // TODO: pre-transition check
                             let msg = match mode.as_u64().expect("invalid value of 'mode'") {
+                                0 => {
+                                    state.set_logging_disable();
+                                    warn!("state set to {:?}, logging disabled", state);
+                                    format!("state set to {:?}", state)
+                                },
                                 2 => {
                                     recover.rebuild_mode_forward_full();
                                     recover.kickoff();
