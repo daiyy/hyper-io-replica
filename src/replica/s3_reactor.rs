@@ -101,7 +101,11 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn close(&self) -> Result<u64> {
-        Ok(0)
+        let (ctx, rx) = FileContext::new_release();
+        self.handler.send(ctx);
+        let res = rx.await.expect("task channel closed");
+        // FIXME: return cno
+        res.map(|_| 0)
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>) -> Result<()> {
