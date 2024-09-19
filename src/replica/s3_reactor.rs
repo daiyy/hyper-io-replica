@@ -92,6 +92,10 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         res
     }
 
+    async fn write_zero(&self, offset: u64, len: u64) -> Result<usize> {
+        todo!();
+    }
+
     async fn flush(&self) -> Result<u64> {
         let (ctx, rx) = FileContext::new_flush();
         self.handler.send(ctx);
