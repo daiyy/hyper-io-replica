@@ -67,6 +67,12 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn write(&self, offset: u64, buf: &[u8]) -> Result<usize> {
+        if utils::is_all_zeros(buf) {
+            match self.write_zero(offset, len as u64).await {
+                Ok(len) => { return Ok(len); },
+                Err(_) => { /* failback to physical write */ },
+            }
+        }
         let rt = self.rt.clone();
         let hyper = self.file.clone();
         let b = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
@@ -79,7 +85,14 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn write_zero(&self, offset: u64, len: u64) -> Result<usize> {
-        todo!();
+        let rt = self.rt.clone();
+        let hyper = self.file.clone();
+        smol::unblock(move || {
+            rt.block_on(async {
+                let mut lock = hyper.write().await;
+                lock.fs_write_zero(offset as usize, len as usize).await
+            })
+        }).await
     }
 
     async fn flush(&self) -> Result<u64> {

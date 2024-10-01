@@ -4,6 +4,7 @@ use tokio::runtime;
 use tokio::sync::oneshot;
 use super::Replica;
 use crate::replica::PendingIo;
+use crate::utils;
 use reactor::{TaskHandler, LocalSpawner};
 use s3_hyperfile::s3uri::S3Uri;
 use s3_hyperfile::file::hyper::Hyper;
@@ -84,6 +85,12 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn write(&self, offset: u64, buf: &[u8]) -> Result<usize> {
+        if utils::is_all_zeros(buf) {
+            match self.write_zero(offset, buf.len() as u64).await {
+                Ok(len) => { return Ok(len); },
+                Err(_) => { /* failback to physical write */ },
+            }
+        }
         let b = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
         let (ctx, tx, mut rx) = FileContext::new_write(b, offset as usize, self.handler.clone());
         self.handler.send(ctx);
@@ -93,7 +100,11 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn write_zero(&self, offset: u64, len: u64) -> Result<usize> {
-        todo!();
+        let (ctx, tx, mut rx) = FileContext::new_write_zero(offset as usize, len as usize, self.handler.clone());
+        self.handler.send(ctx);
+        let res = rx.recv().await.expect("task channel closed");
+        drop(tx);
+        res
     }
 
     async fn flush(&self) -> Result<u64> {
