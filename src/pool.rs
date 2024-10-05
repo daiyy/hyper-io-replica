@@ -256,6 +256,17 @@ impl<T> TgtPendingBlocksPool<T> {
         }
     }
 
+    pub(crate) async fn periodic_replica_flush(pool: Rc<RefCell<Self>>)
+        where T: Replica + 'static
+    {
+        // create a dedicate intance of replica deivce instance
+        let replica_device = pool.borrow().replica_device.dup().await;
+        loop {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+            let _ = replica_device.flush().await;
+        }
+    }
+
     pub(crate) fn start(self, unix_sock: PathBuf, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()>
         where T: Replica + 'static
     {
@@ -279,6 +290,11 @@ impl<T> TgtPendingBlocksPool<T> {
             let c_pool = rc_pool.clone();
             f_vec.push(exec.spawn(async move {
                 Self::periodic(c_pool).await;
+            }));
+
+            let c_pool = rc_pool.clone();
+            f_vec.push(exec.spawn(async move {
+                Self::periodic_replica_flush(c_pool).await;
             }));
 
             let rc_exec = Rc::new(exec);
