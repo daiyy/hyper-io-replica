@@ -98,27 +98,25 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     async fn flush(&self) -> Result<u64> {
         let rt = self.rt.clone();
         let hyper = self.file.clone();
-        smol::unblock(move || {
+        let segid = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
                 lock.fs_flush().await
             })
-        }).await
-        // TODO: return cno
-        Ok(0)
+        }).await?;
+        Ok(segid)
     }
 
     async fn close(&self) -> Result<u64> {
         let rt = self.rt.clone();
         let hyper = self.file.clone();
-        smol::unblock(move || {
+        let segid = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
                 lock.fs_release(false).await
             })
-        }).await
-        // TODO: return cno
-        Ok(0)
+        }).await?;
+        Ok(segid)
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>) -> Result<()> {
