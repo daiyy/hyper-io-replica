@@ -209,13 +209,12 @@ impl<T> TgtPendingBlocksPool<T> {
                 // 2. wait incoming queue empty?
                 // 3. write_to_replica
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
+                pool.borrow_mut().pending_bytes = 0;
 
                 let _ = replica_device.log_pending_io(pending).await;
 
                 state.set_logging_disable();
 
-                pool.borrow_mut().pending_queue = Vec::new();
-                pool.borrow_mut().pending_bytes = 0;
             } else if pool.borrow().pending_bytes >= pool.borrow().max_capacity / 2 {
                 debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes exceed 1/2 max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
@@ -224,11 +223,9 @@ impl<T> TgtPendingBlocksPool<T> {
                 // 2. find last FLUSH in the queue and take out, leave remains in the queue
                 // 3. write_to_replica
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
+                pool.borrow_mut().pending_bytes = 0;
 
                 let _ = replica_device.log_pending_io(pending).await;
-
-                pool.borrow_mut().pending_queue = Vec::new();
-                pool.borrow_mut().pending_bytes = 0;
             }
         }
         info!("TgtPendingBlocksPool quit");
@@ -247,11 +244,9 @@ impl<T> TgtPendingBlocksPool<T> {
                 debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes, periodic flush",
                     pending_queue_len, pending_bytes);
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
+                pool.borrow_mut().pending_bytes = 0;
 
                 let _ = replica_device.log_pending_io(pending).await;
-
-                pool.borrow_mut().pending_queue = Vec::new();
-                pool.borrow_mut().pending_bytes = 0;
             }
         }
     }
