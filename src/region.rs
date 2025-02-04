@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn region_new() {
-        const TB: usize = 1024 * 1024 * 1024 * 1024;
+        const TB: u64 = 1024 * 1024 * 1024 * 1024;
         let dev_size = 1 * TB;
         let region_size = 8 * 1024 * 1024;
         let region = Region::new(dev_size, region_size);
