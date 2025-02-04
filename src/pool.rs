@@ -12,6 +12,7 @@ use crate::region::Region;
 use crate::recover::RecoverCtrl;
 use crate::mgmt::CommandChannel;
 use crate::replica::Replica;
+use crate::device::{MetaDeviceDesc, MetaDevice};
 
 pub(crate) enum PendingIo {
     Write(WriteIo),
@@ -162,10 +163,11 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     pending_queue: Vec<PendingIo>,
     pending_bytes: usize,
     max_capacity: usize,
+    meta_dev_desc: MetaDeviceDesc,
 }
 
 impl<T> TgtPendingBlocksPool<T> {
-    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T) -> Self
+    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev_desc: MetaDeviceDesc) -> Self
         where T: Replica + 'static
     {
         let (tx, rx) = channel::unbounded();
@@ -177,6 +179,7 @@ impl<T> TgtPendingBlocksPool<T> {
             max_capacity: max_capacity,
             replica_path: replica_path.to_string(),
             replica_device: replica_device,
+            meta_dev_desc,
         }
     }
 
@@ -197,6 +200,8 @@ impl<T> TgtPendingBlocksPool<T> {
         info!("  - region {:?}", region);
         let rx = pool.borrow().rx.clone();
         let replica_device = pool.borrow().replica_device.dup().await;
+        let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
+        let meta_dev = MetaDevice::open(&meta_dev_desc).await;
         while let Ok(mut v) = rx.recv().await {
             let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
             pool.borrow_mut().pending_bytes += total_bytes;
@@ -211,7 +216,8 @@ impl<T> TgtPendingBlocksPool<T> {
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
                 pool.borrow_mut().pending_bytes = 0;
 
-                let _ = replica_device.log_pending_io(pending).await;
+                let segid = replica_device.log_pending_io(pending).await.expect("failed to log pending io");
+                meta_dev.sync(segid).await;
 
                 state.set_logging_disable();
 
@@ -225,7 +231,8 @@ impl<T> TgtPendingBlocksPool<T> {
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
                 pool.borrow_mut().pending_bytes = 0;
 
-                let _ = replica_device.log_pending_io(pending).await;
+                let segid = replica_device.log_pending_io(pending).await.expect("failed to log pending io");
+                meta_dev.sync(segid).await;
             }
         }
         info!("TgtPendingBlocksPool quit");
@@ -236,6 +243,8 @@ impl<T> TgtPendingBlocksPool<T> {
     {
         // create a dedicate intance of replica deivce instance
         let replica_device = pool.borrow().replica_device.dup().await;
+        let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
+        let meta_dev = MetaDevice::open(&meta_dev_desc).await;
         loop {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
             let pending_bytes = pool.borrow().pending_bytes;
@@ -246,7 +255,8 @@ impl<T> TgtPendingBlocksPool<T> {
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
                 pool.borrow_mut().pending_bytes = 0;
 
-                let _ = replica_device.log_pending_io(pending).await;
+                let segid = replica_device.log_pending_io(pending).await.expect("failed to log pending io");
+                meta_dev.sync(segid).await;
             }
         }
     }
@@ -256,9 +266,12 @@ impl<T> TgtPendingBlocksPool<T> {
     {
         // create a dedicate intance of replica deivce instance
         let replica_device = pool.borrow().replica_device.dup().await;
+        let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
+        let meta_dev = MetaDevice::open(&meta_dev_desc).await;
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
-            let _ = replica_device.flush().await;
+            let segid = replica_device.flush().await.expect("replica deivce flush failed");
+            meta_dev.sync(segid).await;
         }
     }
 

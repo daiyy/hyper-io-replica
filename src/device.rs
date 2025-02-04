@@ -1,3 +1,4 @@
+use smol::fs::{File, OpenOptions, unix::OpenOptionsExt};
 use block_utils::Device;
 
 const MIN_TARGET_DEVICE_REGIONS: u64 = 2;
@@ -63,5 +64,47 @@ impl PrimaryDevice {
     }
 
     pub fn verify(&self) {
+    }
+}
+
+#[derive(Clone)]
+pub struct MetaDeviceDesc {
+    pub device_path: String,
+    pub offset: u64,
+    pub size: u64,
+}
+
+impl MetaDeviceDesc {
+    pub fn from_primary_device(pri: &PrimaryDevice) -> Self {
+        Self {
+            device_path: pri.device_path.clone(),
+            offset: pri.tgt_device_size,
+            size: pri.reserved_size,
+        }
+    }
+}
+
+pub struct MetaDevice {
+    pub desc: MetaDeviceDesc,
+    pub file: File,
+}
+
+impl MetaDevice {
+    pub async fn open(desc: &MetaDeviceDesc) -> Self {
+        let dev_path = &desc.device_path;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_DIRECT)
+            .open(dev_path)
+            .await
+            .unwrap_or_else(|_| panic!("failed to open meta device {dev_path}"));
+        Self {
+            desc: desc.to_owned(),
+            file: file,
+        }
+    }
+
+    pub async fn sync(&self, id: u64) {
     }
 }

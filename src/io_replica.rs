@@ -590,6 +590,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         }
     };
 
+    // get meta device desc from primary device
+    let meta_dev_desc = device::MetaDeviceDesc::from_primary_device(&pri_dev);
+
     // init replica device and check it's size
     let (s3_replica_device, file_replica_device, replica_device_size) = smol::block_on(async {
         if replica.starts_with("s3://") || replica.starts_with("S3://") {
@@ -655,12 +658,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_concurrency(recover_concurrency);
 
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
-        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap());
+        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc);
         let _tx = tgt.get_tx_chan();
         let _main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
         (_tx, _main)
     } else {
-        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap());
+        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc);
         let _tx = tgt.get_tx_chan();
         let _main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
         (_tx, _main)
