@@ -17,5 +17,5 @@ pub trait Replica: Sized + Send {
     fn write_zero(&self, offset: u64, len: u64) -> impl Future<Output = Result<usize>>;
     fn flush(&self) -> impl Future<Output = Result<u64>>;
     fn close(&self) -> impl Future<Output = Result<u64>>;
-    fn log_pending_io(&self, pending: Vec<PendingIo>) -> impl Future<Output = Result<()>>;
+    fn log_pending_io(&self, pending: Vec<PendingIo>) -> impl Future<Output = Result<u64>>;
 }

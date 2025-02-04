@@ -96,7 +96,7 @@ impl Replica for FileReplica {
         Ok(0)
     }
 
-    async fn log_pending_io(&self, pending: Vec<PendingIo>) -> Result<()> {
+    async fn log_pending_io(&self, pending: Vec<PendingIo>) -> Result<u64> {
         for io in pending.into_iter() {
             if io.size() == 0 {
                 assert!(io.data_size() == 0);
@@ -106,8 +106,8 @@ impl Replica for FileReplica {
             let buf = io.as_ref();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
-        self.flush().await.expect("unable to flush replica deivce");
-        Ok(())
+        let segid = self.flush().await.expect("unable to flush replica deivce");
+        Ok(segid)
     }
 }
 
