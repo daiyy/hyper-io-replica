@@ -4,7 +4,7 @@ use libublk::uring_async::ublk_wait_and_handle_ios;
 use libublk::{ctrl::UblkCtrl, helpers::IoBuf, UblkError, UblkIORes};
 use libublk::sys::ublksrv_io_desc;
 use libublk::uring_async::ublk_wake_task;
-use log::{trace, debug};
+use log::{trace, info, debug};
 use serde::{Deserialize, Serialize};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -607,7 +607,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     });
 
     if replica_device_size < raw_device_sz {
-        panic!("replica device do NOT have enough space, raw device size need {}, actually replica device size {}",
+        info!("replica device do NOT have enough space, raw device size need {}, actually replica device size {}",
             raw_device_sz, replica_device_size);
     }
 
