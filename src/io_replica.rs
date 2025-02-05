@@ -24,6 +24,7 @@ use crate::replica::{Replica, file::FileReplica};
 use crate::replica::s3::S3Replica;
 #[cfg(feature="reactor")]
 use crate::replica::s3_reactor::S3Replica;
+use crate::device::MetaDevice;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -592,6 +593,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     // get meta device desc from primary device
     let meta_dev_desc = device::MetaDeviceDesc::from_primary_device(&pri_dev);
+    // open meta device for consistency check
+    let meta_dev = smol::block_on(async {
+        MetaDevice::open(&meta_dev_desc).await
+    });
+    info!("Flush Log loading from metadate area successfully");
+    info!("{}", meta_dev.flush_log);
 
     // init replica device and check it's size
     let (s3_replica_device, file_replica_device, replica_device_size) = smol::block_on(async {
