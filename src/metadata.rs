@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::SystemTime;
 use crate::ondisk::*;
 
@@ -6,6 +7,13 @@ pub struct FlushLog {
     pub raw: FlushLogBlockRaw,
     pub current_group: usize,
     pub current_index: usize,
+}
+
+impl fmt::Display for FlushLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Flush Log: current group {}, current index: {}", self.current_group, self.current_index)?;
+        write!(f, "{}", self.raw)
+    }
 }
 
 impl FlushLog {
@@ -28,7 +36,7 @@ impl FlushLog {
         let grp1 = self.raw.log_group[1].find_avail();
 
         if grp0.is_none() && grp1.is_none() {
-            panic!("inconsistent of FlushLogBlock, both group0 and group1 entries are full");
+            panic!("inconsistent of FlushLogBlock, both group0 and group1 entries are full {:?}", self);
         }
 
         if grp0.is_some() && grp1.is_none() {
@@ -89,6 +97,16 @@ impl FlushLog {
         }
         // goto next entry of this group
         self.current_index += 1;
+    }
+
+    pub fn last_entry(&self) -> &FlushEntryRaw {
+        if self.current_index > 0 {
+            let index = self.current_index - 1;
+            return &self.raw.log_group[self.current_group].0[index];
+        }
+        let sib_group = if self.current_group == 0 { 1 } else { 0 };
+        let index = 7;
+        &self.raw.log_group[sib_group].0[index]
     }
 }
 
