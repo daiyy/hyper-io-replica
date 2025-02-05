@@ -233,6 +233,8 @@ impl<T> TgtPendingBlocksPool<T> {
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
             }
+            // yield to prevent long term occupation of this task
+            smol::future::yield_now().await;
         }
         info!("TgtPendingBlocksPool quit");
     }
