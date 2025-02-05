@@ -1,3 +1,4 @@
+use std::fmt;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(8))]
@@ -42,9 +43,29 @@ impl FlushEntryRaw {
     }
 }
 
+impl fmt::Display for FlushEntryRaw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.cno == 0 && self.nanos == 0 {
+            write!(f, "[Unused Entry]")?;
+            return Ok(());
+        }
+        let dt = time::OffsetDateTime::from_unix_timestamp_nanos(self.nanos as i128).unwrap();
+        write!(f, "[{}, {}]", self.cno, dt.format(&time::format_description::well_known::Rfc3339).unwrap())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, align(8))]
 pub struct FlushEntryGroupRaw(pub [FlushEntryRaw; 8]);
+
+impl fmt::Display for FlushEntryGroupRaw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, entry) in self.0.iter().enumerate() {
+            write!(f, "[{}]{} ", i, entry)?;
+        }
+        Ok(())
+    }
+}
 
 impl FlushEntryGroupRaw {
     // find first avail entry, return it's index
@@ -71,6 +92,13 @@ impl FlushEntryGroupRaw {
 #[repr(C, align(8))]
 pub struct FlushLogBlockRaw {
     pub log_group: [FlushEntryGroupRaw; 2],
+}
+
+impl fmt::Display for FlushLogBlockRaw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "group0 => {}", self.log_group[0])?;
+        write!(f, "group1 => {}", self.log_group[1])
+    }
 }
 
 impl FlushLogBlockRaw {
