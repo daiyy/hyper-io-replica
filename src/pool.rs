@@ -246,7 +246,7 @@ impl<T> TgtPendingBlocksPool<T> {
             let pending_bytes = pool.borrow().pending_bytes;
             let pending_queue_len = pool.borrow().pending_queue.len();
             if pending_bytes > 0 {
-                debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes, periodic flush",
+                debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes, periodic log pending io",
                     pending_queue_len, pending_bytes);
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
                 pool.borrow_mut().pending_bytes = 0;
