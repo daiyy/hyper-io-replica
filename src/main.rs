@@ -30,6 +30,8 @@ mod device;
 mod replica;
 mod stats;
 mod utils;
+mod ondisk;
+mod metadata;
 
 #[derive(Parser)]
 #[command(version)]

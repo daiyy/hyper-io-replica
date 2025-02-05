@@ -1,5 +1,8 @@
 use smol::fs::{File, OpenOptions, unix::OpenOptionsExt};
+use smol::io::{AsyncWriteExt, AsyncReadExt, AsyncSeekExt, SeekFrom};
 use block_utils::Device;
+use crate::metadata::FlushLog;
+use crate::ondisk::FlushLogBlockRaw;
 
 const MIN_TARGET_DEVICE_REGIONS: u64 = 2;
 const MIN_META_BLOCK_SIZE: u64 = 32_768;
@@ -87,24 +90,35 @@ impl MetaDeviceDesc {
 pub struct MetaDevice {
     pub desc: MetaDeviceDesc,
     pub file: File,
+    pub flush_log: FlushLog,
 }
 
 impl MetaDevice {
     pub async fn open(desc: &MetaDeviceDesc) -> Self {
         let dev_path = &desc.device_path;
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(libc::O_DIRECT)
             .open(dev_path)
             .await
             .unwrap_or_else(|_| panic!("failed to open meta device {dev_path}"));
+
+        let _ = file.seek(SeekFrom::Start(desc.offset)).await;
+        let mut raw = FlushLogBlockRaw::default();
+        let _ = file.read_exact(raw.as_mut_u8_slice()).await;
+
         Self {
             desc: desc.to_owned(),
             file: file,
+            flush_log: FlushLog::from(&raw),
         }
     }
 
-    pub async fn sync(&self, id: u64) {
+    pub async fn flush_log_sync(&mut self, id: u64) {
+        self.flush_log.log_one(id);
+
+        let _ = self.file.seek(SeekFrom::Start(self.desc.offset)).await;
+        let _ = self.file.write_all(self.flush_log.raw.as_u8_slice()).await;
     }
 }
