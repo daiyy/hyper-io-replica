@@ -200,8 +200,6 @@ impl<T> TgtPendingBlocksPool<T> {
         info!("  - region {:?}", region);
         let rx = pool.borrow().rx.clone();
         let replica_device = pool.borrow().replica_device.dup().await;
-        let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
-        let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
         while let Ok(mut v) = rx.recv().await {
             let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
             pool.borrow_mut().pending_bytes += total_bytes;
@@ -217,7 +215,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 pool.borrow_mut().pending_bytes = 0;
 
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
-                meta_dev.flush_log_sync(segid).await;
+                assert!(segid == 0);
 
                 state.set_logging_disable();
 
@@ -232,7 +230,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 pool.borrow_mut().pending_bytes = 0;
 
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
-                meta_dev.flush_log_sync(segid).await;
+                assert!(segid == 0);
             }
         }
         info!("TgtPendingBlocksPool quit");
@@ -243,8 +241,6 @@ impl<T> TgtPendingBlocksPool<T> {
     {
         // create a dedicate intance of replica deivce instance
         let replica_device = pool.borrow().replica_device.dup().await;
-        let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
-        let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
         loop {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
             let pending_bytes = pool.borrow().pending_bytes;
@@ -256,7 +252,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 pool.borrow_mut().pending_bytes = 0;
 
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
-                meta_dev.flush_log_sync(segid).await;
+                assert!(segid == 0);
             }
         }
     }
