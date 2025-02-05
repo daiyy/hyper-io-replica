@@ -216,7 +216,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
                 pool.borrow_mut().pending_bytes = 0;
 
-                let segid = replica_device.log_pending_io(pending).await.expect("failed to log pending io");
+                let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 meta_dev.flush_log_sync(segid).await;
 
                 state.set_logging_disable();
@@ -231,7 +231,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
                 pool.borrow_mut().pending_bytes = 0;
 
-                let segid = replica_device.log_pending_io(pending).await.expect("failed to log pending io");
+                let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 meta_dev.flush_log_sync(segid).await;
             }
         }
@@ -255,7 +255,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
                 pool.borrow_mut().pending_bytes = 0;
 
-                let segid = replica_device.log_pending_io(pending).await.expect("failed to log pending io");
+                let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 meta_dev.flush_log_sync(segid).await;
             }
         }

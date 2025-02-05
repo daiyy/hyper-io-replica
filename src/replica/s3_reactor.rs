@@ -121,7 +121,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         res.map(|segid| segid.as_raw())
     }
 
-    async fn log_pending_io(&self, pending: Vec<PendingIo>) -> Result<u64> {
+    async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
         for io in pending.into_iter() {
             if io.size() == 0 {
                 assert!(io.data_size() == 0);
@@ -131,7 +131,11 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             let buf = io.as_ref();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
-        let segid = self.flush().await.expect("unable to flush replica deivce");
+        let segid = if flush {
+            self.flush().await.expect("unable to flush replica deivce")
+        } else {
+            0
+        };
         Ok(segid)
     }
 }
