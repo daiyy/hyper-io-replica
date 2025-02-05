@@ -2,6 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::time::SystemTime;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
@@ -266,7 +267,9 @@ impl<T> TgtPendingBlocksPool<T> {
         let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
+            let now = SystemTime::now();
             let segid = replica_device.flush().await.expect("replica deivce flush failed");
+            debug!("TgtPendingBlocksPool - periodic replica flush done - segid: {}, cost: {:?}", segid, now.elapsed().unwrap());
             meta_dev.flush_log_sync(segid).await;
         }
     }
