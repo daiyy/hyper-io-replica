@@ -4,7 +4,7 @@ use libublk::uring_async::ublk_wait_and_handle_ios;
 use libublk::{ctrl::UblkCtrl, helpers::IoBuf, UblkError, UblkIORes};
 use libublk::sys::ublksrv_io_desc;
 use libublk::uring_async::ublk_wake_task;
-use log::{trace, info, debug};
+use log::{trace, info, debug, warn};
 use serde::{Deserialize, Serialize};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -601,21 +601,33 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     info!("{}", meta_dev.flush_log);
 
     // init replica device and check it's size
-    let (s3_replica_device, file_replica_device, replica_device_size) = smol::block_on(async {
+    let (s3_replica_device, file_replica_device, replica_device_size, replica_cno) = smol::block_on(async {
         if replica.starts_with("s3://") || replica.starts_with("S3://") {
             let device = S3Replica::new(&replica).await;
             let sz = device.size();
-            return (Some(device), None, sz);
+            // a empty flush will return last cno of replica device file
+            let cno = device.flush().await.expect("unable to get last cno by flush");
+            return (Some(device), None, sz, cno);
         } else {
             let device = FileReplica::new(&replica).await;
             let sz = device.size();
-            return (None, Some(device), sz);
+            // a empty flush will return last cno of replica device file
+            let cno = device.flush().await.expect("unable to get last cno by flush");
+            return (None, Some(device), sz, cno);
         };
     });
 
+    // device boot check
     if replica_device_size < raw_device_sz {
         info!("replica device do NOT have enough space, raw device size need {}, actually replica device size {}",
             raw_device_sz, replica_device_size);
+    }
+
+    let primary_cno = meta_dev.flush_log.last_entry().cno;
+    if primary_cno != replica_cno {
+        warn!("primary cno {} NOT equals to replica cno {}", primary_cno, replica_cno);
+        warn!("starting recovery process");
+        unimplemented!();
     }
 
     let file_path = format!("{}", file.as_path().display());
