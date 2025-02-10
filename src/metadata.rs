@@ -110,6 +110,26 @@ impl FlushLog {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SuperBlock {
+    pub raw: SuperBlockRaw,
+}
+
+impl fmt::Display for SuperBlock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "SuperBlock:")?;
+        write!(f, "{}", self.raw)
+    }
+}
+
+impl SuperBlock {
+    pub fn from(raw: &SuperBlockRaw) -> Self {
+        Self {
+            raw: *raw,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
