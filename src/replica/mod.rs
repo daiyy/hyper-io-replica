@@ -2,6 +2,7 @@ use std::io::Result;
 use std::future::Future;
 use crate::pool::PendingIo;
 
+pub(crate) mod blank;
 pub(crate) mod file;
 #[cfg(feature="blocking")]
 pub(crate) mod s3;

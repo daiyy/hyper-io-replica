@@ -1,0 +1,42 @@
+use std::io::Result;
+use crate::replica::{Replica, PendingIo};
+
+pub struct BlankReplica {}
+
+impl Replica for BlankReplica {
+    async fn new(_dev_path: &str) -> Self {
+        Self {}
+    }
+
+    async fn dup(&self) -> Self {
+        todo!();
+    }
+
+    fn size(&self) -> u64 {
+        todo!();
+    }
+
+    async fn read(&self, _offset: u64, _buf: &mut [u8]) -> Result<usize> {
+        todo!();
+    }
+
+    async fn write(&self, _offset: u64, _buf: &[u8]) -> Result<usize> {
+        todo!();
+    }
+
+    async fn write_zero(&self, _offset: u64, _len: u64) -> Result<usize> {
+        todo!();
+    }
+
+    async fn flush(&self) -> Result<u64> {
+        todo!();
+    }
+
+    async fn close(&self) -> Result<u64> {
+        todo!();
+    }
+
+    async fn log_pending_io(&self, _pending: Vec<PendingIo>, _flush: bool) -> Result<u64> {
+        todo!();
+    }
+}
