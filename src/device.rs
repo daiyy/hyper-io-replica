@@ -1,8 +1,10 @@
+use std::time::SystemTime;
+use log::info;
 use smol::fs::{File, OpenOptions, unix::OpenOptionsExt};
 use smol::io::{AsyncWriteExt, AsyncReadExt, AsyncSeekExt, SeekFrom};
 use block_utils::Device;
-use crate::metadata::FlushLog;
-use crate::ondisk::FlushLogBlockRaw;
+use crate::metadata::{SuperBlock, FlushLog};
+use crate::ondisk::{SuperBlockRaw, FlushLogBlockRaw};
 
 const MIN_TARGET_DEVICE_REGIONS: u64 = 2;
 const MIN_META_BLOCK_SIZE: u64 = 32_768;
@@ -75,6 +77,7 @@ pub struct MetaDeviceDesc {
     pub device_path: String,
     pub offset: u64,
     pub size: u64,
+    pub sb_offset: u64,
 }
 
 impl MetaDeviceDesc {
@@ -83,6 +86,8 @@ impl MetaDeviceDesc {
             device_path: pri.device_path.clone(),
             offset: pri.tgt_device_size,
             size: pri.reserved_size,
+            // align sb offset to last sector
+            sb_offset: (pri.tgt_raw_size - 512) >> 9 << 9,
         }
     }
 }
@@ -91,6 +96,7 @@ pub struct MetaDevice {
     pub desc: MetaDeviceDesc,
     pub file: File,
     pub flush_log: FlushLog,
+    pub sb: SuperBlock,
 }
 
 impl MetaDevice {
@@ -104,15 +110,56 @@ impl MetaDevice {
             .await
             .unwrap_or_else(|_| panic!("failed to open meta device {dev_path}"));
 
+        // read sb
+        let _ = file.seek(SeekFrom::Start(desc.sb_offset)).await;
+        info!("load super block from {}", desc.sb_offset);
+        let mut sb_raw = SuperBlockRaw::default();
+        let _ = file.read_exact(sb_raw.as_mut_u8_slice()).await;
+
+        // read flush log
         let _ = file.seek(SeekFrom::Start(desc.offset)).await;
-        let mut raw = FlushLogBlockRaw::default();
-        let _ = file.read_exact(raw.as_mut_u8_slice()).await;
+        info!("load flush log from {}", desc.offset);
+        let mut fl_raw = FlushLogBlockRaw::default();
+        let _ = file.read_exact(fl_raw.as_mut_u8_slice()).await;
 
         Self {
             desc: desc.to_owned(),
             file: file,
-            flush_log: FlushLog::from(&raw),
+            flush_log: FlushLog::from(&fl_raw),
+            sb: SuperBlock::from(&sb_raw),
         }
+    }
+
+    pub async fn format(desc: &MetaDeviceDesc, primary_size: u64, replica_uuid: &[u8; 16]) {
+        let dev_path = &desc.device_path;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_DIRECT)
+            .open(dev_path)
+            .await
+            .unwrap_or_else(|_| panic!("failed to open meta device {dev_path}"));
+
+        // init flush log
+        let mut fl_raw = FlushLogBlockRaw::default();
+
+        // init sb
+        let mut sb_raw = SuperBlockRaw::default();
+        sb_raw.allocated_size = primary_size;
+        sb_raw.reserved_size = desc.size;
+        sb_raw.metadata_offset = desc.offset;
+        sb_raw.replica_dev_uuid = replica_uuid.to_owned();
+        let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        sb_raw.creation_timestamp = now;
+
+        let _ = file.seek(SeekFrom::Start(desc.offset)).await;
+        let _ = file.write_all(fl_raw.as_u8_slice()).await;
+
+        let _ = file.seek(SeekFrom::Start(desc.sb_offset)).await;
+        let _ = file.write_all(sb_raw.as_u8_slice()).await;
     }
 
     pub async fn flush_log_sync(&mut self, id: u64) {
@@ -120,5 +167,28 @@ impl MetaDevice {
 
         let _ = self.file.seek(SeekFrom::Start(self.desc.offset)).await;
         let _ = self.file.write_all(self.flush_log.raw.as_u8_slice()).await;
+    }
+
+    pub async fn sb_open_sync(&mut self) {
+        let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        self.sb.raw.startup_timestamp = now;
+        self.sb.raw.shutdown_timestamp = 0;
+        let _ = self.file.seek(SeekFrom::Start(self.desc.sb_offset)).await;
+        let _ = self.file.write_all(self.sb.raw.as_u8_slice()).await;
+    }
+
+    pub async fn sb_close_sync(&mut self) {
+        self.sb.raw.last_cno = self.flush_log.last_entry().cno;
+
+        let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        self.sb.raw.shutdown_timestamp = now;
+        let _ = self.file.seek(SeekFrom::Start(self.desc.sb_offset)).await;
+        let _ = self.file.write_all(self.sb.raw.as_u8_slice()).await;
     }
 }
