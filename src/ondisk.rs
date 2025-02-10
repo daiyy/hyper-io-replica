@@ -1,17 +1,88 @@
 use std::fmt;
+use time::format_description::well_known::Rfc3339;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(8))]
 pub struct SuperBlockRaw {
-    magic: [u8; 8],
-    checksum: u64,
-    allocated_size: u64,
-    reserved_size: u64,
-    metadata_offset: u64,
-    creation_timestamp: u64,
-    startup_timestamp: u64,
-    replica_dev_uuid: [u8; 16],
-    padding: [u64; 55],
+    pub magic: [u8; 8],
+    pub checksum: u64,
+    pub allocated_size: u64,
+    pub reserved_size: u64,
+    pub metadata_offset: u64,
+    pub creation_timestamp: u64,
+    pub startup_timestamp: u64,
+    pub shutdown_timestamp: u64, // timestamp is 0 means not a clean shutdown
+    pub last_cno: u64,
+    pub replica_dev_uuid: [u8; 16],
+    padding: [u64; 53],
+}
+
+impl fmt::Display for SuperBlockRaw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use std::borrow::Cow;
+        use std::ffi::CStr;
+        use uuid::Uuid;
+
+        let magic = CStr::from_bytes_with_nul(&self.magic)
+                .and_then(
+                    |s| Ok(s.to_string_lossy())
+                )
+                .unwrap_or(
+                    Cow::Borrowed("Invalid SuperBlock Magic")
+                );
+        let replica_uuid = Uuid::from_slice(&self.replica_dev_uuid).unwrap();
+
+        let create = time::OffsetDateTime::from_unix_timestamp(self.creation_timestamp as i64).unwrap();
+        let startup = time::OffsetDateTime::from_unix_timestamp(self.startup_timestamp as i64).unwrap();
+        let shutdown = time::OffsetDateTime::from_unix_timestamp(self.shutdown_timestamp as i64).unwrap();
+
+        writeln!(f, "  magic: {}, replica: {}", &magic, replica_uuid)?;
+        writeln!(f, "  checksum: {:x}, last cno: {}", self.checksum, self.last_cno)?;
+        writeln!(f, "  allocated_size: {}, reserved_size: {}, metadata_offset: {}",
+            self.allocated_size, self.reserved_size, self.metadata_offset)?;
+        write!(f, "  creation_time: {}, startup_time: {}, shutdown_time: {}",
+            create.format(&Rfc3339).unwrap(),
+            startup.format(&Rfc3339).unwrap(),
+            shutdown.format(&Rfc3339).unwrap())
+    }
+}
+
+impl Default for SuperBlockRaw {
+    fn default() -> Self {
+        Self {
+            magic: [b'H', b'Y', b'P', b'E', b'R', b'I', b'O', 0],
+            checksum: 0,
+            allocated_size: 0,
+            reserved_size: 0,
+            metadata_offset: 0,
+            creation_timestamp: 0,
+            startup_timestamp: 0,
+            shutdown_timestamp: 0,
+            last_cno: 0,
+            replica_dev_uuid: [0u8; 16],
+            padding: [0u64; 53],
+        }
+    }
+}
+
+impl SuperBlockRaw {
+    pub fn as_mut_u8_slice(&mut self) -> &mut [u8] {
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                (self as *mut Self) as *mut u8,
+                std::mem::size_of::<Self>()
+            )
+        }
+    }
+
+    pub fn as_u8_slice(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                (self as *const Self) as *const u8,
+                std::mem::size_of::<Self>()
+            )
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -50,7 +121,7 @@ impl fmt::Display for FlushEntryRaw {
             return Ok(());
         }
         let dt = time::OffsetDateTime::from_unix_timestamp_nanos(self.nanos as i128).unwrap();
-        write!(f, "[{}, {}]", self.cno, dt.format(&time::format_description::well_known::Rfc3339).unwrap())
+        write!(f, "[{}, {}]", self.cno, dt.format(&Rfc3339).unwrap())
     }
 }
 
