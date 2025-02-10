@@ -597,7 +597,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let meta_dev = smol::block_on(async {
         MetaDevice::open(&meta_dev_desc).await
     });
-    info!("Flush Log loading from metadate area successfully");
+    info!("Metadata device opened successfully");
+    info!("{}", meta_dev.sb);
     info!("{}", meta_dev.flush_log);
 
     // init replica device and check it's size
