@@ -155,11 +155,16 @@ impl MetaDevice {
                 .as_secs();
         sb_raw.creation_timestamp = now;
 
+        info!("write flush log at {}", desc.offset);
         let _ = file.seek(SeekFrom::Start(desc.offset)).await;
-        let _ = file.write_all(fl_raw.as_u8_slice()).await;
+        let res = file.write(fl_raw.as_u8_slice()).await;
+        info!("flush log write res: {:?}", res);
 
+        info!("write super block at {}", desc.sb_offset);
+        info!("{}", sb_raw);
         let _ = file.seek(SeekFrom::Start(desc.sb_offset)).await;
-        let _ = file.write_all(sb_raw.as_u8_slice()).await;
+        let res = file.write(sb_raw.as_u8_slice()).await;
+        info!("super block write res: {:?}", res);
     }
 
     pub async fn flush_log_sync(&mut self, id: u64) {
