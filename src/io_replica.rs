@@ -67,6 +67,10 @@ pub struct IoReplicaArgs {
     #[clap(long, default_value = "./.ioreplica")]
     pub unix_socket: PathBuf,
 
+    /// force recover during startup
+    #[clap(long, default_value_t = false)]
+    pub force_startup_recover: bool,
+
     /// recover concurrency
     #[clap(long, default_value_t = 1)]
     pub recover_concurrency: usize,
@@ -84,6 +88,7 @@ struct LoJson {
     local_pool_size: u64,
     device_size: u64,
     raw_device_size: u64,
+    force_startup_recover: bool,
     recover_concurrency: usize,
 }
 
@@ -100,6 +105,7 @@ pub(crate) struct LoopTgt {
     pub device_size: u64,
     pub raw_device_size: u64,
     pub primary_device: device::PrimaryDevice,
+    pub force_startup_recover: bool,
     pub recover_concurrency: usize,
 }
 
@@ -320,7 +326,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, recover_concurrency: lo.recover_concurrency, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, force_startup_recover: lo.force_startup_recover, recover_concurrency: lo.recover_concurrency, } });
     dev.set_target_json(val);
 
     Ok(())
@@ -518,7 +524,8 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 }
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, unix_sock, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz, pri_dev, recover_concurrency) = match opt {
+    let (file, unix_sock, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz,
+            pri_dev, force_startup_recover, recover_concurrency) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -545,6 +552,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 primary.tgt_device_size,
                 input_device_size,
                 primary,
+                o.force_startup_recover,
                 o.recover_concurrency,
             )
         }
@@ -581,6 +589,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.device_size,
                             t.raw_device_size,
                             primary,
+                            t.force_startup_recover,
                             t.recover_concurrency,
                         )},
                         Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
@@ -627,8 +636,11 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let primary_cno = meta_dev.flush_log.last_entry().cno;
     if primary_cno != replica_cno {
         warn!("primary cno {} NOT equals to replica cno {}", primary_cno, replica_cno);
-        warn!("starting recovery process");
-        unimplemented!();
+        if !force_startup_recover {
+            warn!(" force_startup_recover is {force_startup_recover}, exit.");
+            return Ok(-libc::EINVAL);
+        }
+        warn!(" starting recovery process ...");
     }
 
     let file_path = format!("{}", file.as_path().display());
@@ -653,6 +665,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         device_size: device_sz,
         raw_device_size: raw_device_sz,
         primary_device: pri_dev,
+        force_startup_recover: force_startup_recover,
         recover_concurrency: recover_concurrency,
     };
 
