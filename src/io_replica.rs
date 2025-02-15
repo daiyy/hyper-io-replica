@@ -693,15 +693,27 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
         let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc);
         let _tx = tgt.get_tx_chan();
-        let _main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
+        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone());
         (_tx, _main)
     } else {
         let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc);
         let _tx = tgt.get_tx_chan();
-        let _main = tgt.start(unix_sock, tgt_state, g_region.clone(), g_recover_ctrl.clone());
+        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone());
         (_tx, _main)
     };
     let region_shift = g_region.region_shift();
+
+    if primary_cno > replica_cno {
+        g_recover_ctrl.rebuild_mode_forward_full();
+        g_recover_ctrl.kickoff();
+        tgt_state.set_logging_enable();
+        info!("state set to {:?}", tgt_state);
+    } else if primary_cno < replica_cno {
+        g_recover_ctrl.rebuild_mode_reverse_full();
+        g_recover_ctrl.kickoff();
+        tgt_state.set_logging_enable();
+        info!("state set to {:?}", tgt_state);
+    }
 
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
