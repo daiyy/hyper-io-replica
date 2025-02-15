@@ -268,15 +268,18 @@ impl<T> TgtPendingBlocksPool<T> {
         let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
         let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
         let entry = meta_dev.flush_log.last_entry();
-        let mut last_cno = entry.cno;
+        let mut last_replica_ondisk_cno = replica_device.last_cno();
+        let mut last_primary_metadata_cno = entry.cno;
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
             let now = SystemTime::now();
             let cno = replica_device.flush().await.expect("replica deivce flush failed");
             debug!("TgtPendingBlocksPool - periodic replica flush done - segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
-            if last_cno < cno {
+            if last_replica_ondisk_cno < cno && last_primary_metadata_cno < cno {
+                // only sync log entry cno for an effective replica flush
                 let _ = meta_dev.flush_log_sync(cno).await;
-                last_cno = cno;
+                last_primary_metadata_cno = cno;
+                last_replica_ondisk_cno = cno;
             }
         }
     }
