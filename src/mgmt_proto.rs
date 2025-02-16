@@ -28,6 +28,7 @@ pub struct Command {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum RunMode {
+    LoggingDisable = 0,
     ForwardFull = 2,
     ForwardPart = 3,
     ReverseFull = 4,
