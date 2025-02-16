@@ -14,6 +14,7 @@ use crate::region::Region;
 use crate::recover::RecoverCtrl;
 use crate::pool::TgtPendingBlocksPool;
 use crate::stats::Stats;
+use crate::mgmt_proto::*;
 
 pub(crate) struct Global<T> {
     pub(crate) state: Rc<GlobalTgtState>,
@@ -44,30 +45,6 @@ impl<T> Global<T> {
             pool: g_pool,
         }
     }
-}
-
-#[derive(Debug)]
-#[derive(Serialize, Deserialize)]
-pub enum CommandOp {
-    Mode,
-    Region,
-    Recover,
-    Stat,
-}
-
-#[derive(Debug)]
-#[derive(Serialize, Deserialize)]
-pub enum CommandDir {
-    Get,
-    Set,
-}
-
-#[derive(Debug)]
-#[derive(Serialize, Deserialize)]
-pub struct Command {
-    op: CommandOp,
-    dir: CommandDir,
-    params: HashMap<String, serde_json::Value>,
 }
 
 impl Command {

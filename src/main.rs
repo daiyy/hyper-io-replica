@@ -32,6 +32,7 @@ mod stats;
 mod utils;
 mod ondisk;
 mod metadata;
+mod mgmt_proto;
 
 #[derive(Parser)]
 #[command(version)]
