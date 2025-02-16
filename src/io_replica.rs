@@ -690,13 +690,15 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_replica_path(&replica)
         .with_concurrency(recover_concurrency);
 
+    let dev_id = ctrl.dev_info().dev_id;
+
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
-        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc);
+        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc, dev_id);
         let _tx = tgt.get_tx_chan();
         let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone());
         (_tx, _main)
     } else {
-        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc);
+        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc, dev_id);
         let _tx = tgt.get_tx_chan();
         let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone());
         (_tx, _main)

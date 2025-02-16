@@ -165,10 +165,11 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     pending_bytes: usize,
     max_capacity: usize,
     meta_dev_desc: MetaDeviceDesc,
+    dev_id: u32,
 }
 
 impl<T> TgtPendingBlocksPool<T> {
-    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev_desc: MetaDeviceDesc) -> Self
+    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev_desc: MetaDeviceDesc, dev_id: u32) -> Self
         where T: Replica + 'static
     {
         let (tx, rx) = channel::unbounded();
@@ -181,6 +182,7 @@ impl<T> TgtPendingBlocksPool<T> {
             replica_path: replica_path.to_string(),
             replica_device: replica_device,
             meta_dev_desc,
+            dev_id,
         }
     }
 
