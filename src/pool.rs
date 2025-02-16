@@ -268,7 +268,7 @@ impl<T> TgtPendingBlocksPool<T> {
         let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
         let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
         let entry = meta_dev.flush_log.last_entry();
-        let mut last_replica_ondisk_cno = replica_device.last_cno();
+        let mut last_replica_ondisk_cno = replica_device.last_cno().await;
         let mut last_primary_metadata_cno = entry.cno;
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;

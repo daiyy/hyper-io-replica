@@ -113,6 +113,10 @@ impl Replica for FileReplica {
         };
         Ok(segid)
     }
+
+    async fn last_cno(&self) -> u64 {
+        0
+    }
 }
 
 fn to_io(err: nix::Error) -> std::io::Error {

@@ -136,4 +136,8 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         };
         Ok(segid)
     }
+
+    async fn last_cno(&self) -> u64 {
+        self.file.read().await.last_cno()
+    }
 }

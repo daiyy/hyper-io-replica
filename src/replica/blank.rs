@@ -39,4 +39,8 @@ impl Replica for BlankReplica {
     async fn log_pending_io(&self, _pending: Vec<PendingIo>, _flush: bool) -> Result<u64> {
         todo!();
     }
+
+    async fn last_cno(&self) -> u64 {
+        todo!();
+    }
 }
