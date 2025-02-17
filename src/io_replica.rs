@@ -697,6 +697,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let dev_id = ctrl.dev_info().dev_id;
     let fired_flag = Arc::new(AtomicBool::new(false));
     let fired = fired_flag.clone();
+    let c_sock_path = sock_path.clone();
     ctrlc::set_handler(move || {
         if fired.load(Ordering::SeqCst) {
             warn!("shutdown handler already fired");
@@ -704,7 +705,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         }
         info!("shutdown handler get fired");
         fired.store(true, Ordering::SeqCst);
-        let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
+        let mut client = MgmtClient::new(&c_sock_path).expect("failed to create mgmt client for shutdown handler");
         client.grace_shutdown();
     }).expect("Failed to set shutdown handler");
 
@@ -722,15 +723,11 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let region_shift = g_region.region_shift();
 
     if primary_cno > replica_cno {
-        g_recover_ctrl.rebuild_mode_forward_full();
-        g_recover_ctrl.kickoff();
-        tgt_state.set_logging_enable();
-        info!("state set to {:?}", tgt_state);
+        let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
+        client.forward_full();
     } else if primary_cno < replica_cno {
-        g_recover_ctrl.rebuild_mode_reverse_full();
-        g_recover_ctrl.kickoff();
-        tgt_state.set_logging_enable();
-        info!("state set to {:?}", tgt_state);
+        let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
+        client.reverse_full();
     }
 
     ctrl.run_target(
