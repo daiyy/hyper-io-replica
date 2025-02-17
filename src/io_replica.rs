@@ -12,6 +12,8 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use bytesize::ByteSize;
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 use crate::state::{LocalTgtState, GlobalTgtState};
@@ -693,7 +695,15 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     // install shutdown handler
     let dev_id = ctrl.dev_info().dev_id;
+    let fired_flag = Arc::new(AtomicBool::new(false));
+    let fired = fired_flag.clone();
     ctrlc::set_handler(move || {
+        if fired.load(Ordering::SeqCst) {
+            warn!("shutdown handler already fired");
+            return;
+        }
+        info!("shutdown handler get fired");
+        fired.store(true, Ordering::SeqCst);
         let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
         client.grace_shutdown();
     }).expect("Failed to set shutdown handler");
