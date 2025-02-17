@@ -25,6 +25,7 @@ use crate::replica::s3::S3Replica;
 #[cfg(feature="reactor")]
 use crate::replica::s3_reactor::S3Replica;
 use crate::device::MetaDevice;
+use crate::mgmt_client::MgmtClient;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -690,7 +691,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         .with_replica_path(&replica)
         .with_concurrency(recover_concurrency);
 
+    // install shutdown handler
     let dev_id = ctrl.dev_info().dev_id;
+    ctrlc::set_handler(move || {
+        let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
+        client.grace_shutdown();
+    }).expect("Failed to set shutdown handler");
 
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
         let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc, dev_id);
