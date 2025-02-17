@@ -33,6 +33,7 @@ mod utils;
 mod ondisk;
 mod metadata;
 mod mgmt_proto;
+mod mgmt_client;
 
 #[derive(Parser)]
 #[command(version)]
