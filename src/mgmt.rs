@@ -85,6 +85,11 @@ impl Command {
                                     state.set_logging_enable();
                                     format!("state set to {:?}", state)
                                 },
+                                255 => {
+                                    let pool = global.pool.clone();
+                                    TgtPendingBlocksPool::stop(pool, state, region, recover).await;
+                                    format!("Target stopped")
+                                },
                                 v @ _ => {
                                     format!("unkown argument 'mode' {}", v)
                                 }
