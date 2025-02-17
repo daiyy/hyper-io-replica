@@ -6,13 +6,14 @@ use smol::fs::{File, OpenOptions, unix::OpenOptionsExt};
 use smol::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 use crate::utils;
 use crate::pool::PendingIo;
-use super::Replica;
+use super::{Replica, ReplicaState};
 
 #[derive(Debug)]
 pub struct FileReplica {
     pub device_path: String,
     pub back_device: Device,
     pub file: RefCell<File>,
+    pub state: ReplicaState,
 }
 
 impl Replica for FileReplica {
@@ -30,6 +31,7 @@ impl Replica for FileReplica {
             device_path: dev_path.to_string(),
             back_device: device,
             file: RefCell::new(file),
+            state: ReplicaState::new(),
         }
     }
 
@@ -47,7 +49,12 @@ impl Replica for FileReplica {
             device_path: self.device_path.clone(),
             back_device: self.back_device.clone(),
             file: RefCell::new(file),
+            state: self.state.clone(),
         }
+    }
+
+    fn open(&self) {
+        self.state.set_opened();
     }
 
     #[inline]
@@ -58,8 +65,10 @@ impl Replica for FileReplica {
     async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
         self.file.borrow_mut().seek(smol::io::SeekFrom::Start(offset)).await?;
         let len = buf.len();
-        self.file.borrow_mut().read_exact(buf).await?;
-        Ok(len)
+        self.state.set_read();
+        let res = self.file.borrow_mut().read_exact(buf).await;
+        self.state.clear_read();
+        res.map(|_| len)
     }
 
     async fn write(&self, offset: u64, buf: &[u8]) -> Result<usize> {
@@ -93,10 +102,12 @@ impl Replica for FileReplica {
 
     async fn close(&self) -> Result<u64> {
         self.file.borrow_mut().close().await?;
+        self.state.set_closed();
         Ok(0)
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
+        let mut bytes = 0;
         for io in pending.into_iter() {
             if io.size() == 0 {
                 assert!(io.data_size() == 0);
@@ -104,18 +115,27 @@ impl Replica for FileReplica {
             }
             let offset = io.offset();
             let buf = io.as_ref();
+            bytes += io.data_size();
+            self.state.set_write();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
         let segid = if flush {
+            self.state.set_flush();
             self.flush().await.expect("unable to flush replica deivce")
         } else {
             0
         };
+        if bytes > 0 { self.state.clear_write() }
+        if flush { self.state.clear_flush() }
         Ok(segid)
     }
 
     async fn last_cno(&self) -> u64 {
         0
+    }
+
+    fn is_active(&self) -> bool {
+        self.state.is_active()
     }
 }
 

@@ -12,6 +12,10 @@ impl Replica for BlankReplica {
         todo!();
     }
 
+    fn open(&self) {
+        todo!();
+    }
+
     fn size(&self) -> u64 {
         todo!();
     }
@@ -41,6 +45,10 @@ impl Replica for BlankReplica {
     }
 
     async fn last_cno(&self) -> u64 {
+        todo!();
+    }
+
+    fn is_active(&self) -> bool {
         todo!();
     }
 }

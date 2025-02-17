@@ -2,7 +2,7 @@ use std::io::Result;
 use std::sync::Arc;
 use tokio::runtime;
 use tokio::sync::oneshot;
-use super::Replica;
+use super::{Replica, ReplicaState};
 use crate::replica::PendingIo;
 use crate::utils;
 use reactor::{TaskHandler, LocalSpawner};
@@ -17,6 +17,7 @@ pub struct S3Replica<'a> {
     pub spawner: LocalSpawner<FileContext<'a>, Hyper<'a>>,
     pub handler: TaskHandler<FileContext<'a>>,
     pub stat: libc::stat,
+    pub state: ReplicaState,
 }
 
 impl<'a: 'static> S3Replica<'a> {
@@ -49,6 +50,7 @@ impl<'a: 'static> S3Replica<'a> {
                 spawner: spawner,
                 handler: fh,
                 stat: stat,
+                state: ReplicaState::new(),
             };
         }
         panic!("invalid input device path {dev_path} for s3 replica");
@@ -68,7 +70,12 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             spawner: self.spawner.clone(),
             handler: self.handler.clone(),
             stat: self.stat.clone(),
+            state: self.state.clone(),
         }
+    }
+
+    fn open(&self) {
+        self.state.set_opened();
     }
 
     #[inline]
@@ -79,8 +86,10 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
         let b = unsafe { std::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, buf.len()) };
         let (ctx, tx, mut rx) = FileContext::new_read(b, offset as usize);
+        self.state.set_read();
         self.handler.send(ctx);
         let res = rx.recv().await.expect("task channel closed");
+        self.state.clear_read();
         drop(tx);
         res
     }
@@ -94,22 +103,27 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         }
         let b = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
         let (ctx, tx, mut rx) = FileContext::new_write(b, offset as usize, self.handler.clone());
+        self.state.set_read();
         self.handler.send(ctx);
         let res = rx.recv().await.expect("task channel closed");
+        self.state.clear_read();
         drop(tx);
         res
     }
 
     async fn write_zero(&self, offset: u64, len: u64) -> Result<usize> {
         let (ctx, tx, mut rx) = FileContext::new_write_zero(offset as usize, len as usize, self.handler.clone());
+        self.state.set_write();
         self.handler.send(ctx);
         let res = rx.recv().await.expect("task channel closed");
+        self.state.clear_write();
         drop(tx);
         res
     }
 
     async fn flush(&self) -> Result<u64> {
         let (ctx, rx) = FileContext::new_flush();
+        self.state.set_flush();
         self.handler.send(ctx);
         let res = rx.await.expect("task channel closed");
         res.map(|segid| segid.as_raw())
@@ -119,10 +133,12 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let (ctx, rx) = FileContext::new_release();
         self.handler.send(ctx);
         let res = rx.await.expect("task channel closed");
+        self.state.set_closed();
         res.map(|segid| segid.as_raw())
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
+        let mut bytes = 0;
         for io in pending.into_iter() {
             if io.size() == 0 {
                 assert!(io.data_size() == 0);
@@ -130,13 +146,18 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             }
             let offset = io.offset();
             let buf = io.as_ref();
+            bytes += io.data_size();
+            self.state.set_write();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
         let segid = if flush {
+            self.state.set_flush();
             self.flush().await.expect("unable to flush replica deivce")
         } else {
             0
         };
+        if bytes > 0 { self.state.clear_write() }
+        if flush { self.state.clear_flush() }
         Ok(segid)
     }
 
@@ -144,5 +165,9 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let (ctx, rx) = FileContext::new_last_cno();
         self.handler.send(ctx);
         rx.await.expect("task channel closed")
+    }
+
+    fn is_active(&self) -> bool {
+        self.state.is_active()
     }
 }

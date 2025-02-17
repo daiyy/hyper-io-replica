@@ -1,8 +1,9 @@
 use std::io::Result;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use smol::lock::RwLock;
 use tokio::runtime;
-use super::Replica;
+use super::{Replica, ReplicaState};
 use crate::replica::PendingIo;
 use s3_hyperfile::s3uri::S3Uri;
 use s3_hyperfile::file::hyper::Hyper;
@@ -12,6 +13,7 @@ pub struct S3Replica<'a> {
     pub device_path: String,
     pub file: Arc<RwLock<Hyper<'a>>>,
     pub rt: Arc<runtime::Runtime>,
+    pub state: ReplicaState,
 }
 
 impl<'a: 'static> S3Replica<'a> {
@@ -28,6 +30,7 @@ impl<'a: 'static> S3Replica<'a> {
                 device_path: dev_path.to_string(),
                 file: Arc::new(RwLock::new(hyper)),
                 rt: rt,
+                state: ReplicaState::new(),
             };
         }
         panic!("invalid input device path {dev_path} for s3 replica");
@@ -45,7 +48,12 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             device_path: self.device_path.to_owned(),
             file: self.file.clone(),
             rt: self.rt.clone(),
+            state: self.state.clone(),
         }
+    }
+
+    fn open(&self) {
+        self.state.set_opened();
     }
 
     #[inline]
@@ -58,12 +66,15 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let rt = self.rt.clone();
         let hyper = self.file.clone();
         let b = unsafe { std::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, buf.len()) };
-        smol::unblock(move || {
+        self.state.set_read();
+        let res = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
                 lock.fs_read(b, offset as usize).await
             })
-        }).await
+        }).await;
+        self.state.clear_read();
+        res
     }
 
     async fn write(&self, offset: u64, buf: &[u8]) -> Result<usize> {
@@ -98,13 +109,12 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     async fn flush(&self) -> Result<u64> {
         let rt = self.rt.clone();
         let hyper = self.file.clone();
-        let segid = smol::unblock(move || {
+        smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
                 lock.fs_flush().await
             })
-        }).await?;
-        Ok(segid)
+        }).await
     }
 
     async fn close(&self) -> Result<u64> {
@@ -116,10 +126,12 @@ impl<'a: 'static> Replica for S3Replica<'a> {
                 lock.fs_release(false).await
             })
         }).await?;
+        self.state.set_closed();
         Ok(segid)
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
+        let mut bytes = 0;
         for io in pending.into_iter() {
             if io.size() == 0 {
                 assert!(io.data_size() == 0);
@@ -127,17 +139,26 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             }
             let offset = io.offset();
             let buf = io.as_ref();
+            bytes += io.data_size();
+            self.state.set_write();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
         let segid = if flush {
+            self.state.set_flush();
             self.flush().await.expect("unable to flush replica deivce")
         } else {
             0
         };
+        if bytes > 0 { self.state.clear_write() }
+        if flush { self.state.clear_flush() }
         Ok(segid)
     }
 
     async fn last_cno(&self) -> u64 {
         self.file.read().await.last_cno()
+    }
+
+    fn is_active(&self) -> bool {
+        self.state.is_activity()
     }
 }
