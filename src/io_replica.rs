@@ -722,6 +722,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     };
     let region_shift = g_region.region_shift();
 
+    // mgmt client will block until mgmt backend received the command,
+    // so it is safe that when client returned, process is kicked.
     if primary_cno > replica_cno {
         let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
         client.forward_full();
