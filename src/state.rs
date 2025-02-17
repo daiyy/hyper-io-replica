@@ -155,6 +155,11 @@ impl GlobalTgtState {
         let _ = self.inner.fetch_and(state, Ordering::SeqCst);
         self.inner.load(Ordering::SeqCst)
     }
+
+    pub(crate) fn is_recovery(&self) -> bool {
+        let recovery_state = TGT_STATE_RECOVERY_FORWARD_FULL | TGT_STATE_RECOVERY_FORWARD_PART | TGT_STATE_RECOVERY_REVERSE_FULL;
+        self.inner.load(Ordering::SeqCst) & recovery_state > 0
+    }
 }
 
 #[inline]
