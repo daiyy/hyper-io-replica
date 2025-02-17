@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
+use libublk::{ctrl::UblkCtrl, UblkError, UblkFlags};
 use smol::channel;
 use smol::LocalExecutor;
-use log::{info, debug};
+use log::{info, debug, warn};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
@@ -338,5 +339,62 @@ impl<T> TgtPendingBlocksPool<T> {
 
             smol::block_on(async { loop { rc_exec.tick().await }});
         })
+    }
+
+    fn stop_ublk_dev(dev_id: u32) -> Result<(), UblkError> {
+        let ctrl = UblkCtrl::new_simple(dev_id as i32)?;
+        ctrl.stop_dev()?;
+        Ok(())
+    }
+
+    async fn inner_stop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) -> Result<(), UblkError> {
+        let dev_id = pool.borrow().dev_id;
+
+        // stop ublk dev in a blocking thread
+        smol::unblock(move || {
+            Self::stop_ublk_dev(dev_id)
+        }).await?;
+
+        // wait any recover complete
+        while state.is_recovery() {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+        }
+
+        // wait pending io channel empty
+        let rx = pool.borrow().rx.clone();
+        while !rx.is_empty() {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+        }
+
+        // wait pending queue empty
+        while pool.borrow().pending_queue.len() > 0 {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+        }
+
+        // TODO: check no activity on replica device
+
+        // finally close superblock
+        let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
+        let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
+        let _ = meta_dev.sb_close_sync().await;
+
+        std::process::exit(0);
+        Ok(())
+    }
+
+    pub(crate) async fn stop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {
+        loop {
+            match Self::inner_stop(pool.clone(), state.clone(), region.clone(), recover.clone()).await {
+                Ok(_) => { break; },
+                Err(UblkError::UringIoQueued) => {
+                    smol::Timer::after(std::time::Duration::from_secs(5)).await;
+                    continue;
+                },
+                Err(e) => {
+                    warn!("stop ublk device error {}", e);
+                    break;
+                }
+            }
+        }
     }
 }
