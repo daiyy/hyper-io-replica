@@ -347,7 +347,9 @@ impl<T> TgtPendingBlocksPool<T> {
         Ok(())
     }
 
-    async fn inner_stop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) -> Result<(), UblkError> {
+    async fn inner_stop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) -> Result<(), UblkError>
+        where T: Replica + 'static
+    {
         let dev_id = pool.borrow().dev_id;
 
         // stop ublk dev in a blocking thread
@@ -371,7 +373,10 @@ impl<T> TgtPendingBlocksPool<T> {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
         }
 
-        // TODO: check no activity on replica device
+        let replica = pool.borrow().replica_device.dup().await;
+        while replica.is_active() {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+        }
 
         // finally close superblock
         let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
@@ -382,7 +387,9 @@ impl<T> TgtPendingBlocksPool<T> {
         Ok(())
     }
 
-    pub(crate) async fn stop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {
+    pub(crate) async fn stop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>)
+        where T: Replica + 'static
+    {
         loop {
             match Self::inner_stop(pool.clone(), state.clone(), region.clone(), recover.clone()).await {
                 Ok(_) => { break; },

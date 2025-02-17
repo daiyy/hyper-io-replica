@@ -14,6 +14,7 @@ use crate::region::Region;
 use crate::recover::RecoverCtrl;
 use crate::pool::TgtPendingBlocksPool;
 use crate::stats::Stats;
+use crate::replica::Replica;
 use crate::mgmt_proto::*;
 
 pub(crate) struct Global<T> {
@@ -48,7 +49,7 @@ impl<T> Global<T> {
 }
 
 impl Command {
-    pub async fn execute<T>(self, global: Global<T>) -> Option<String> {
+    pub async fn execute<T: Replica + 'static>(self, global: Global<T>) -> Option<String> {
         let state = global.state.clone();
         let recover = global.recover.clone();
         let region = global.region.clone();
@@ -152,7 +153,7 @@ impl CommandChannel {
         }
     }
 
-    pub async fn main_handler<'a, T: 'a>(&self, state: Rc<GlobalTgtState>, region: Rc<Region>,
+    pub async fn main_handler<'a, T: Replica + 'static + 'a>(&self, state: Rc<GlobalTgtState>, region: Rc<Region>,
             recover: Rc<RecoverCtrl>, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'a>>)
     {
         let global = Global::new(state.clone(), region.clone(), recover.clone(), pool.clone());
@@ -168,7 +169,7 @@ impl CommandChannel {
     }
 
     // handle command stream in loop until EOF received
-    pub async fn cmd_handler<T>(mut stream: UnixStream, global: Global<T>) {
+    pub async fn cmd_handler<T: Replica + 'static>(mut stream: UnixStream, global: Global<T>) {
         loop {
             let mut reader = BufReader::new(stream.clone());
             let mut buf_in = Vec::new();
