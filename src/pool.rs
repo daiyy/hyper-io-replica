@@ -204,6 +204,7 @@ impl<T> TgtPendingBlocksPool<T> {
         info!("  - region {:?}", region);
         let rx = pool.borrow().rx.clone();
         let replica_device = pool.borrow().replica_device.dup().await;
+        replica_device.open();
         while let Ok(mut v) = rx.recv().await {
             let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
             pool.borrow_mut().pending_bytes += total_bytes;
