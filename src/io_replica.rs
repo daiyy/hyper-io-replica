@@ -607,12 +607,17 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     // get meta device desc from primary device
     let meta_dev_desc = device::MetaDeviceDesc::from_primary_device(&pri_dev);
     // open meta device for consistency check
-    let meta_dev = smol::block_on(async {
+    let mut meta_dev = smol::block_on(async {
         MetaDevice::open(&meta_dev_desc).await
     });
     info!("Metadata device opened successfully");
     info!("{}", meta_dev.sb);
     info!("{}", meta_dev.flush_log);
+
+    // flush startup timestamp and clear shutdown timestamp before go ahead
+    smol::block_on(async {
+        meta_dev.sb_open_sync().await;
+    });
 
     // init replica device and check it's size
     let (s3_replica_device, file_replica_device, replica_device_size, replica_cno) = smol::block_on(async {
