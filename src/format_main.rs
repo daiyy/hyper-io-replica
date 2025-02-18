@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::io::Result;
 use std::path::PathBuf;
 use clap::Parser;

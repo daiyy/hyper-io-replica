@@ -140,6 +140,7 @@ impl MetaDevice {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn format(desc: &MetaDeviceDesc, primary_size: u64, replica_uuid: &[u8; 16]) {
         let dev_path = &desc.device_path;
         let mut file = OpenOptions::new()
