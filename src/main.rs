@@ -34,6 +34,7 @@ mod ondisk;
 mod metadata;
 mod mgmt_proto;
 mod mgmt_client;
+mod task;
 
 #[derive(Parser)]
 #[command(version)]

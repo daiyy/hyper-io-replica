@@ -17,6 +17,7 @@ use crate::state;
 use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
 use crate::replica::Replica;
+use crate::task::{TaskState, TaskId};
 
 const RECOVERY_WAIT_ON_MS: u64 = 50;
 const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
@@ -592,7 +593,9 @@ impl RecoverCtrl {
         v
     }
 
-    pub(crate) async fn main_loop<'a, 'b, T: Replica + 'a + 'b>(&self, replica: T, exec: Rc<LocalExecutor<'b>>) {
+    pub(crate) async fn main_loop<'a, 'b, T: Replica + 'a + 'b>(&self, replica: T, exec: Rc<LocalExecutor<'b>>, task_state: TaskState) {
+        task_state.wait_on_tgt_pool_start().await;
+        task_state.set_start(TaskId::Recover);
         // keep waiting on next cmd from channel
         while let Ok(cmd) = self.rx.recv().await {
             if cmd {

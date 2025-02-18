@@ -15,6 +15,7 @@ use crate::recover::RecoverCtrl;
 use crate::mgmt::CommandChannel;
 use crate::replica::Replica;
 use crate::device::{MetaDeviceDesc, MetaDevice};
+use crate::task::{TaskState, TaskId};
 
 pub(crate) enum PendingIo {
     Write(WriteIo),
@@ -196,7 +197,7 @@ impl<T> TgtPendingBlocksPool<T> {
     }
 
     pub(crate) async fn main_loop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>,
-            region: Rc<Region>, _recover: Rc<RecoverCtrl>)
+            region: Rc<Region>, _recover: Rc<RecoverCtrl>, task_state: TaskState)
         where T: Replica + 'static
     {
         info!("TgtPendingBlocksPool started with:");
@@ -205,6 +206,7 @@ impl<T> TgtPendingBlocksPool<T> {
         let rx = pool.borrow().rx.clone();
         let replica_device = pool.borrow().replica_device.dup().await;
         replica_device.open();
+        task_state.set_start(TaskId::Pool);
         while let Ok(mut v) = rx.recv().await {
             let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
             pool.borrow_mut().pending_bytes += total_bytes;
@@ -243,11 +245,13 @@ impl<T> TgtPendingBlocksPool<T> {
         info!("TgtPendingBlocksPool quit");
     }
 
-    pub(crate) async fn periodic(pool: Rc<RefCell<Self>>)
+    pub(crate) async fn periodic(pool: Rc<RefCell<Self>>, task_state: TaskState)
         where T: Replica + 'static
     {
         // create a dedicate intance of replica deivce instance
         let replica_device = pool.borrow().replica_device.dup().await;
+        task_state.wait_on_tgt_pool_start().await;
+        task_state.set_start(TaskId::Periodic);
         loop {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
             let pending_bytes = pool.borrow().pending_bytes;
@@ -264,7 +268,7 @@ impl<T> TgtPendingBlocksPool<T> {
         }
     }
 
-    pub(crate) async fn periodic_replica_flush(pool: Rc<RefCell<Self>>)
+    pub(crate) async fn periodic_replica_flush(pool: Rc<RefCell<Self>>, task_state: TaskState)
         where T: Replica + 'static
     {
         // create a dedicate intance of replica deivce instance
@@ -274,6 +278,8 @@ impl<T> TgtPendingBlocksPool<T> {
         let entry = meta_dev.flush_log.last_entry();
         let mut last_replica_ondisk_cno = replica_device.last_cno().await;
         let mut last_primary_metadata_cno = entry.cno;
+        task_state.wait_on_tgt_pool_start().await;
+        task_state.set_start(TaskId::PeriodicReplicaFlush);
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
             let now = SystemTime::now();
@@ -288,7 +294,7 @@ impl<T> TgtPendingBlocksPool<T> {
         }
     }
 
-    pub(crate) fn start(self, unix_sock: PathBuf, state: GlobalTgtState, region: Region, recover: RecoverCtrl) -> std::thread::JoinHandle<()>
+    pub(crate) fn start(self, unix_sock: PathBuf, state: GlobalTgtState, region: Region, recover: RecoverCtrl, task_state: TaskState) -> std::thread::JoinHandle<()>
         where T: Replica + 'static
     {
         std::thread::spawn(move || {
@@ -304,18 +310,21 @@ impl<T> TgtPendingBlocksPool<T> {
             let c_state = rc_state.clone();
             let c_region = rc_region.clone();
             let c_recover = rc_recover.clone();
+            let c_task_state = task_state.clone();
             f_vec.push(exec.spawn(async move {
-                Self::main_loop(c_pool, c_state, c_region, c_recover).await;
+                Self::main_loop(c_pool, c_state, c_region, c_recover, c_task_state).await;
             }));
 
             let c_pool = rc_pool.clone();
+            let c_task_state = task_state.clone();
             f_vec.push(exec.spawn(async move {
-                Self::periodic(c_pool).await;
+                Self::periodic(c_pool, c_task_state).await;
             }));
 
             let c_pool = rc_pool.clone();
+            let c_task_state = task_state.clone();
             f_vec.push(exec.spawn(async move {
-                Self::periodic_replica_flush(c_pool).await;
+                Self::periodic_replica_flush(c_pool, c_task_state).await;
             }));
 
             let rc_exec = Rc::new(exec);
@@ -323,9 +332,10 @@ impl<T> TgtPendingBlocksPool<T> {
             let c_recover = rc_recover.clone();
             let c_exec = rc_exec.clone();
             let c_pool = rc_pool.clone();
+            let c_task_state = task_state.clone();
             f_vec.push(rc_exec.spawn(async move {
                 let replica = c_pool.borrow().replica_device.dup().await;
-                c_recover.main_loop(replica, c_exec).await;
+                c_recover.main_loop(replica, c_exec, c_task_state).await;
             }));
 
             let cmd_chan = CommandChannel::new(unix_sock.as_path());
@@ -334,8 +344,9 @@ impl<T> TgtPendingBlocksPool<T> {
             let c_recover = rc_recover.clone();
             let c_pool = rc_pool.clone();
             let c_exec = rc_exec.clone();
+            let c_task_state = task_state.clone();
             f_vec.push(rc_exec.spawn(async move {
-                cmd_chan.main_handler(c_state, c_region, c_recover, c_pool, c_exec).await;
+                cmd_chan.main_handler(c_state, c_region, c_recover, c_pool, c_exec, c_task_state).await;
             }));
 
             smol::block_on(async { loop { rc_exec.tick().await }});

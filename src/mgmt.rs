@@ -16,6 +16,7 @@ use crate::pool::TgtPendingBlocksPool;
 use crate::stats::Stats;
 use crate::replica::Replica;
 use crate::mgmt_proto::*;
+use crate::task::{TaskState, TaskId};
 
 pub(crate) struct Global<T> {
     pub(crate) state: Rc<GlobalTgtState>,
@@ -154,10 +155,12 @@ impl CommandChannel {
     }
 
     pub async fn main_handler<'a, T: Replica + 'static + 'a>(&self, state: Rc<GlobalTgtState>, region: Rc<Region>,
-            recover: Rc<RecoverCtrl>, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'a>>)
+            recover: Rc<RecoverCtrl>, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'a>>, task_state: TaskState)
     {
         let global = Global::new(state.clone(), region.clone(), recover.clone(), pool.clone());
         let mut incoming = self.listener.incoming();
+        task_state.wait_on_tgt_pool_start().await;
+        task_state.set_start(TaskId::MgmtChannel);
         while let Some(stream) = incoming.next().await {
             let stream = stream.expect("failed to get unix stream");
             let c_global = global.clone();

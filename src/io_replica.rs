@@ -28,6 +28,7 @@ use crate::replica::s3::S3Replica;
 use crate::replica::s3_reactor::S3Replica;
 use crate::device::MetaDevice;
 use crate::mgmt_client::MgmtClient;
+use crate::task::TaskState;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -709,18 +710,25 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         client.grace_shutdown();
     }).expect("Failed to set shutdown handler");
 
+    // create a task state tracker
+    let task_state = TaskState::new();
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
         let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc, dev_id);
         let _tx = tgt.get_tx_chan();
-        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone());
+        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
     } else {
         let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc, dev_id);
         let _tx = tgt.get_tx_chan();
-        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone());
+        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
     };
     let region_shift = g_region.region_shift();
+
+    // wait all backend task started
+    while !task_state.is_all_started() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     // mgmt client will block until mgmt backend received the command,
     // so it is safe that when client returned, process is kicked.
