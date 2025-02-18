@@ -152,7 +152,7 @@ impl FlushEntryGroupRaw {
     }
 
     pub fn clear_all(&mut self) {
-        for mut entry in self.0.iter_mut() {
+        for entry in self.0.iter_mut() {
             entry.clear();
         }
     }

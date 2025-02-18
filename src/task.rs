@@ -14,7 +14,7 @@ use crate::recover::RecoverCtrl;
 use crate::mgmt::CommandChannel;
 use crate::replica::Replica;
 use crate::pool::TgtPendingBlocksPool;
-use crate::device::{MetaDeviceDesc, MetaDevice};
+use crate::device::MetaDevice;
 
 #[repr(u64)]
 pub(crate) enum TaskId {
@@ -186,7 +186,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         Ok(())
     }
 
-    async fn inner_stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) -> Result<(), UblkError> {
+    async fn inner_stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, _region: Rc<Region>, _recover: Rc<RecoverCtrl>) -> Result<(), UblkError> {
         let dev_id = pool.borrow().dev_id;
 
         // stop ublk dev in a blocking thread
@@ -215,13 +215,14 @@ impl<T: Replica + 'static> TaskManager<T> {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
         }
 
+        let _ = replica.close().await;
+
         // finally close superblock
         let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
         let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
         let _ = meta_dev.sb_close_sync().await;
 
         std::process::exit(0);
-        Ok(())
     }
 
     pub(crate) async fn stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {

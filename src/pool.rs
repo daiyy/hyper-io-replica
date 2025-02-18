@@ -1,20 +1,15 @@
 use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::path::PathBuf;
-use std::time::SystemTime;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
-use libublk::{ctrl::UblkCtrl, UblkError, UblkFlags};
 use smol::channel;
-use smol::LocalExecutor;
-use log::{info, debug, warn};
+use log::{info, debug};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
-use crate::mgmt::CommandChannel;
 use crate::replica::Replica;
-use crate::device::{MetaDeviceDesc, MetaDevice};
+use crate::device::MetaDeviceDesc;
 use crate::task::{TaskState, TaskId};
 
 pub(crate) enum PendingIo {
@@ -203,6 +198,7 @@ impl<T> TgtPendingBlocksPool<T> {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
         info!("  - region {:?}", region);
+        info!("  - replica path {}", pool.borrow().replica_path);
         let rx = pool.borrow().rx.clone();
         let replica_device = pool.borrow().replica_device.dup().await;
         replica_device.open();

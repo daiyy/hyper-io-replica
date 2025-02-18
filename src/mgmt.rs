@@ -1,6 +1,5 @@
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
 use log::warn;
 use smol::LocalExecutor;
@@ -8,7 +7,6 @@ use smol::net::unix::{UnixListener, UnixStream};
 use smol::stream::StreamExt;
 use smol::io::{BufReader, AsyncWriteExt};
 use smol::io::AsyncBufReadExt;
-use serde::{Serialize, Deserialize};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;

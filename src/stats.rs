@@ -2,7 +2,6 @@ use std::sync::atomic::Ordering;
 use serde::{Serialize, Deserialize};
 use crate::recover::RecoverState;
 use crate::mgmt::Global;
-use crate::replica::Replica;
 use crate::state;
 
 #[derive(Serialize, Deserialize)]

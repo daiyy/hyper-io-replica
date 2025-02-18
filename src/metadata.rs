@@ -17,6 +17,7 @@ impl fmt::Display for FlushLog {
 }
 
 impl FlushLog {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -78,7 +79,7 @@ impl FlushLog {
     }
 
     pub fn log_one(&mut self, cno: u64) {
-        let mut entry = &mut self.raw.log_group[self.current_group].0[self.current_index];
+        let entry = &mut self.raw.log_group[self.current_group].0[self.current_index];
         assert!(!entry.is_used());
 
         let now = SystemTime::now()

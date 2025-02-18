@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use bytesize::ByteSize;
+use crate::utils;
 use crate::pool::{PendingIo, LocalPendingBlocksPool, TgtPendingBlocksPool};
 use crate::state::{LocalTgtState, GlobalTgtState};
 use crate::device;
@@ -108,6 +109,7 @@ pub(crate) struct LoopTgt {
     pub local_pool_size: u64,
     pub device_size: u64,
     pub raw_device_size: u64,
+    #[allow(dead_code)]
     pub primary_device: device::PrimaryDevice,
     pub force_startup_recover: bool,
     pub recover_concurrency: usize,
@@ -299,7 +301,7 @@ fn lo_init_tgt(
     tgt.fds[nr_fds as usize] = lo.back_file.as_raw_fd();
     tgt.nr_fds = nr_fds + 1;
 
-    let sz = crate::ublk_file_size(&lo.back_file).unwrap();
+    let sz = utils::ublk_file_size(&lo.back_file).unwrap();
     let attrs = if dio {
         0
     } else {
@@ -657,7 +659,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     if unix_sock.as_path().exists() {
         panic!("unix socket {} is alread exists", sock_path);
     }
-    let mut lo = LoopTgt {
+    let lo = LoopTgt {
         back_file: std::fs::OpenOptions::new()
             .read(true)
             .write(!ro)

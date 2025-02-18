@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::SystemTime;
 use log::info;
 use smol::fs::{File, OpenOptions, unix::OpenOptionsExt};
@@ -12,10 +13,12 @@ const MIN_META_BLOCK_SIZE: u64 = 32_768;
 #[derive(Clone, Debug)]
 pub struct PrimaryDevice {
     pub device_path: String,
+    #[allow(dead_code)]
     pub region_size: u64,
     pub tgt_device_size: u64,
     pub reserved_size: u64,
     pub tgt_raw_size: u64,
+    #[allow(dead_code)]
     pub back_device: Device,
 }
 
@@ -68,7 +71,7 @@ impl PrimaryDevice {
         }
     }
 
-    pub fn verify(&self) {
+    pub(crate) fn verify(&self) {
     }
 }
 
@@ -78,6 +81,13 @@ pub struct MetaDeviceDesc {
     pub offset: u64,
     pub size: u64,
     pub sb_offset: u64,
+}
+
+impl fmt::Display for MetaDeviceDesc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, sb_offset: {}}}",
+            self.device_path, self.offset, self.size, self.sb_offset)
+    }
 }
 
 impl MetaDeviceDesc {
@@ -141,7 +151,7 @@ impl MetaDevice {
             .unwrap_or_else(|_| panic!("failed to open meta device {dev_path}"));
 
         // init flush log
-        let mut fl_raw = FlushLogBlockRaw::default();
+        let fl_raw = FlushLogBlockRaw::default();
 
         // init sb
         let mut sb_raw = SuperBlockRaw::default();

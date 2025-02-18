@@ -73,6 +73,7 @@ impl Region {
         self.region_shift
     }
 
+    #[allow(dead_code)]
     // convert to region id
     // return: region id
     #[inline]
@@ -115,6 +116,7 @@ impl Region {
         return (vec_idx, bit_idx);
     }
 
+    #[allow(dead_code)]
     pub fn mark_dirty(&self, start: u64, size: u64) {
         let region_id = self.region_id(start, size);
         self.mark_dirty_region_id(region_id);
@@ -133,11 +135,13 @@ impl Region {
         }
     }
 
+    #[allow(dead_code)]
     pub fn clear_dirty(&self, start: u64, size: u64) {
         let region_id = self.region_id(start, size);
         self.clear_dirty_region_id(region_id);
     }
 
+    #[allow(dead_code)]
     pub fn clear_dirty_region_id(&self, region_id: u64) {
         let (vec_idx, bit_idx) = self.region_id_to_idx(region_id);
 

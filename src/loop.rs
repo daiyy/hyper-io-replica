@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::rc::Rc;
+use crate::utils;
 
 #[derive(clap::Args, Debug)]
 pub struct LoopArgs {
@@ -115,7 +116,7 @@ fn lo_init_tgt(
     tgt.fds[nr_fds as usize] = lo.back_file.as_raw_fd();
     tgt.nr_fds = nr_fds + 1;
 
-    let sz = crate::ublk_file_size(&lo.back_file).unwrap();
+    let sz = utils::ublk_file_size(&lo.back_file).unwrap();
     let attrs = if dio {
         0
     } else {
