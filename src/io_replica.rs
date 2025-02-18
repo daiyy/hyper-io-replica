@@ -28,7 +28,7 @@ use crate::replica::s3::S3Replica;
 use crate::replica::s3_reactor::S3Replica;
 use crate::device::MetaDevice;
 use crate::mgmt_client::MgmtClient;
-use crate::task::TaskState;
+use crate::task::{TaskState, TaskManager};
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -720,12 +720,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
         let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc, dev_id);
         let _tx = tgt.get_tx_chan();
-        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
+        let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
     } else {
         let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc, dev_id);
         let _tx = tgt.get_tx_chan();
-        let _main = tgt.start(unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
+        let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
     };
     let region_shift = g_region.region_shift();

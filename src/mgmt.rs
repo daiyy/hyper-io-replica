@@ -16,7 +16,7 @@ use crate::pool::TgtPendingBlocksPool;
 use crate::stats::Stats;
 use crate::replica::Replica;
 use crate::mgmt_proto::*;
-use crate::task::{TaskState, TaskId};
+use crate::task::{TaskState, TaskId, TaskManager};
 
 pub(crate) struct Global<T> {
     pub(crate) state: Rc<GlobalTgtState>,
@@ -89,7 +89,7 @@ impl Command {
                                 },
                                 255 => {
                                     let pool = global.pool.clone();
-                                    TgtPendingBlocksPool::stop(pool, state, region, recover).await;
+                                    TaskManager::stop(pool, state, region, recover).await;
                                     format!("Target stopped")
                                 },
                                 v @ _ => {
