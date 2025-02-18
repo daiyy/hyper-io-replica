@@ -36,7 +36,6 @@ impl<'a: 'static> S3Replica<'a> {
                 let flags = FileFlags::from(libc::O_RDWR);
                 let hyper = Hyper::fs_open(&client, s3uri.bucket, s3uri.key, flags).await.expect("failed to open hyper file");
                 let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
-                let last_cno = hyper.last_cno();
                 (hyper, stat)
             });
             let (tx, rx) = oneshot::channel();
