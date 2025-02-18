@@ -123,7 +123,6 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn flush(&self) -> Result<u64> {
         let (ctx, rx) = FileContext::new_flush();
-        self.state.set_flush();
         self.handler.send(ctx);
         let res = rx.await.expect("task channel closed");
         res.map(|segid| segid.as_raw())
