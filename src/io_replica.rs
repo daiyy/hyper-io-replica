@@ -619,14 +619,14 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         if replica.starts_with("s3://") || replica.starts_with("S3://") {
             let device = S3Replica::new(&replica).await;
             let sz = device.size();
-            // a empty flush will return last cno of replica device file
-            let cno = device.flush().await.expect("unable to get last cno by flush");
+            // get last cno from replica
+            let cno = device.last_cno().await;
             return (Some(device), None, sz, cno);
         } else {
             let device = FileReplica::new(&replica).await;
             let sz = device.size();
-            // a empty flush will return last cno of replica device file
-            let cno = device.flush().await.expect("unable to get last cno by flush");
+            // get last cno from replica
+            let cno = device.last_cno().await;
             return (None, Some(device), sz, cno);
         };
     });
