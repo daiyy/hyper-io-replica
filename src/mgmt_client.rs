@@ -38,15 +38,25 @@ impl MgmtClient {
         b
     }
 
-    pub(crate) fn grace_shutdown(&mut self) {
-        self.set_mode(RunMode::GraceShutdown);
+    #[allow(dead_code)]
+    pub(crate) fn logging_disable(&mut self) {
+        self.set_mode(RunMode::LoggingDisable);
     }
 
     pub(crate) fn forward_full(&mut self) {
         self.set_mode(RunMode::ForwardFull);
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn forward_part(&mut self) {
+        self.set_mode(RunMode::ForwardPart);
+    }
+
     pub(crate) fn reverse_full(&mut self) {
         self.set_mode(RunMode::ReverseFull);
+    }
+
+    pub(crate) fn grace_shutdown(&mut self) {
+        self.set_mode(RunMode::GraceShutdown);
     }
 }
