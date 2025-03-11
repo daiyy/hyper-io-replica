@@ -6,10 +6,10 @@ use super::{Replica, ReplicaState};
 use crate::replica::PendingIo;
 use crate::utils;
 use reactor::{TaskHandler, LocalSpawner};
-use s3_hyperfile::s3uri::S3Uri;
-use s3_hyperfile::file::hyper::Hyper;
-use s3_hyperfile::file::flags::FileFlags;
-use s3_hyperfile::file::handler::FileContext;
+use hyperfile::s3uri::S3Uri;
+use hyperfile::file::hyper::Hyper;
+use hyperfile::file::flags::FileFlags;
+use hyperfile::file::handler::FileContext;
 
 pub struct S3Replica<'a> {
     pub device_path: String,
@@ -34,7 +34,8 @@ impl<'a: 'static> S3Replica<'a> {
                 let config = aws_config::load_from_env().await;
                 let client = aws_sdk_s3::Client::new(&config);
                 let flags = FileFlags::from(libc::O_RDWR);
-                let hyper = Hyper::fs_open(&client, s3uri.bucket, s3uri.key, flags).await.expect("failed to open hyper file");
+                let _ = s3uri;
+                let hyper = Hyper::fs_open(&client, dev_path, flags).await.expect("failed to open hyper file");
                 let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
                 (hyper, stat)
             });
@@ -124,7 +125,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let (ctx, rx) = FileContext::new_flush();
         self.handler.send(ctx);
         let res = rx.await.expect("task channel closed");
-        res.map(|segid| segid.as_raw())
+        res
     }
 
     async fn close(&self) -> Result<u64> {
@@ -132,7 +133,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         self.handler.send(ctx);
         let res = rx.await.expect("task channel closed");
         self.state.set_closed();
-        res.map(|segid| segid.as_raw())
+        res
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
