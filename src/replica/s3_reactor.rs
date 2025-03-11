@@ -10,6 +10,7 @@ use hyperfile::s3uri::S3Uri;
 use hyperfile::file::hyper::Hyper;
 use hyperfile::file::flags::FileFlags;
 use hyperfile::file::handler::FileContext;
+use hyperfile::config::HyperFileRuntimeConfig;
 
 pub struct S3Replica<'a> {
     pub device_path: String,
@@ -35,7 +36,8 @@ impl<'a: 'static> S3Replica<'a> {
                 let client = aws_sdk_s3::Client::new(&config);
                 let flags = FileFlags::from(libc::O_RDWR);
                 let _ = s3uri;
-                let hyper = Hyper::fs_open(&client, dev_path, flags).await.expect("failed to open hyper file");
+                let runtime_config = HyperFileRuntimeConfig::default_large();
+                let hyper = Hyper::fs_open_opt(&client, dev_path, flags, &runtime_config).await.expect("failed to open hyper file");
                 let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
                 (hyper, stat)
             });
