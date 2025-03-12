@@ -219,6 +219,11 @@ impl<T: Replica + 'static> TaskManager<T> {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
         }
 
+        // wait pending bytes to 0
+        while pool.borrow().pending_bytes > 0 {
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+        }
+
         let replica = pool.borrow().replica_device.dup().await;
         while replica.is_active() {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
