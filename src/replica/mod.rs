@@ -16,6 +16,7 @@ pub const REPLICA_STATE_OPENED: u64 = 0b0000_0001;
 pub const REPLICA_STATE_READ: u64 = 0b0000_0010;
 pub const REPLICA_STATE_WRITE: u64 = 0b0000_0100;
 pub const REPLICA_STATE_FLUSH: u64 = 0b0000_1000;
+pub const REPLICA_STATE_LOGGING: u64 = 0b0001_0000;
 
 #[derive(Clone, Debug)]
 pub struct ReplicaState {
@@ -57,6 +58,14 @@ impl ReplicaState {
         let _ = self.inner.fetch_and(!REPLICA_STATE_FLUSH, Ordering::SeqCst);
     }
 
+    pub fn set_logging(&self) {
+        let _ = self.inner.fetch_or(REPLICA_STATE_LOGGING, Ordering::SeqCst);
+    }
+
+    pub fn clear_logging(&self) {
+        let _ = self.inner.fetch_and(!REPLICA_STATE_LOGGING, Ordering::SeqCst);
+    }
+
     // clear all state bits
     // return:
     //   true - success closed
@@ -75,7 +84,7 @@ impl ReplicaState {
         let state = self.inner.load(Ordering::SeqCst);
         if state == REPLICA_STATE_OPENED {
             return false;
-        } else if state & (REPLICA_STATE_READ | REPLICA_STATE_WRITE | REPLICA_STATE_FLUSH) > 0 && state & REPLICA_STATE_OPENED == 0 {
+        } else if state & (REPLICA_STATE_READ | REPLICA_STATE_WRITE | REPLICA_STATE_FLUSH | REPLICA_STATE_LOGGING) > 0 && state & REPLICA_STATE_OPENED == 0 {
             panic!("ReplicaState: invalid state, activities on replia but not opened");
         }
         true

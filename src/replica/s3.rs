@@ -141,6 +141,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
         let mut bytes = 0;
+        self.state.set_logging();
         for io in pending.into_iter() {
             if io.size() == 0 {
                 assert!(io.data_size() == 0);
@@ -156,6 +157,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         } else {
             0
         };
+        self.state.clear_logging();
         Ok(segid)
     }
 
