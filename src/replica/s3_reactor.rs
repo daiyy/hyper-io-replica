@@ -125,8 +125,10 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn flush(&self) -> Result<u64> {
         let (ctx, rx) = FileContext::new_flush();
+        self.state.set_flush();
         self.handler.send(ctx);
         let res = rx.await.expect("task channel closed");
+        self.state.clear_flush();
         res
     }
 
@@ -148,17 +150,13 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             let offset = io.offset();
             let buf = io.as_ref();
             bytes += io.data_size();
-            self.state.set_write();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
         let segid = if flush {
-            self.state.set_flush();
             self.flush().await.expect("unable to flush replica deivce")
         } else {
             0
         };
-        if bytes > 0 { self.state.clear_write() }
-        if flush { self.state.clear_flush() }
         Ok(segid)
     }
 

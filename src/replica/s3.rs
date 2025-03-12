@@ -87,34 +87,43 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let rt = self.rt.clone();
         let hyper = self.file.clone();
         let b = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
-        smol::unblock(move || {
+        self.state.set_write();
+        let res = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
                 lock.fs_write(b, offset as usize).await
             })
-        }).await
+        }).await;
+        self.state.clear_write();
+        res
     }
 
     async fn write_zero(&self, offset: u64, len: u64) -> Result<usize> {
         let rt = self.rt.clone();
         let hyper = self.file.clone();
-        smol::unblock(move || {
+        self.state.set_write();
+        let res = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
                 lock.fs_write_zero(offset as usize, len as usize).await
             })
-        }).await
+        }).await;
+        self.state.clear_write();
+        res
     }
 
     async fn flush(&self) -> Result<u64> {
         let rt = self.rt.clone();
         let hyper = self.file.clone();
-        smol::unblock(move || {
+        self.state.set_flush();
+        let res = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
                 lock.fs_flush().await
             })
-        }).await
+        }).await;
+        self.state.clear_flush();
+        res
     }
 
     async fn close(&self) -> Result<u64> {
@@ -140,17 +149,13 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             let offset = io.offset();
             let buf = io.as_ref();
             bytes += io.data_size();
-            self.state.set_write();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
         let segid = if flush {
-            self.state.set_flush();
             self.flush().await.expect("unable to flush replica deivce")
         } else {
             0
         };
-        if bytes > 0 { self.state.clear_write() }
-        if flush { self.state.clear_flush() }
         Ok(segid)
     }
 
