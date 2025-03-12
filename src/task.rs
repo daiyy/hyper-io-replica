@@ -117,6 +117,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         task_state.set_start(TaskId::PeriodicReplicaFlush);
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
+            replica_device.is_active() { continue; }
             let now = SystemTime::now();
             let cno = replica_device.flush().await.expect("replica deivce flush failed");
             debug!("TgtPendingBlocksPool - periodic replica flush done - segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
