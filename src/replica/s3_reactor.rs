@@ -36,7 +36,9 @@ impl<'a: 'static> S3Replica<'a> {
                 let client = aws_sdk_s3::Client::new(&config);
                 let flags = FileFlags::from(libc::O_RDWR);
                 let _ = s3uri;
-                let runtime_config = HyperFileRuntimeConfig::default_large();
+                let mut runtime_config = HyperFileRuntimeConfig::default_large();
+                // disable hyper file internal max flush interval threshold
+                runtime_config.data_cache_dirty_max_flush_interval = u64::MAX;
                 let hyper = Hyper::fs_open_opt(&client, dev_path, flags, &runtime_config).await.expect("failed to open hyper file");
                 let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
                 (hyper, stat)
