@@ -83,16 +83,24 @@ impl<T: Replica + 'static> TaskManager<T> {
         task_state.set_start(TaskId::Periodic);
         loop {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
+            if replica_device.is_active() { continue; }
             let pending_bytes = pool.borrow().pending_bytes;
             let pending_queue_len = pool.borrow().pending_queue.len();
+            let staging_data_queue_len = pool.borrow().staging_data_queue.len();
             if pending_bytes > 0 {
-                debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes, periodic log pending io",
-                    pending_queue_len, pending_bytes);
+                debug!("TgtPendingBlocksPool - {} of pending IO, {} of staging data pending IO, total {} bytes, periodic log pending io",
+                    pending_queue_len, staging_data_queue_len, pending_bytes);
+                // take all in staging data queue
+                let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
+                pool.borrow_mut().staging_data_queue_bytes = 0;
+                pool.borrow_mut().pending_queue.append(&mut v);
+                // tak all from pending queue
                 let pending = pool.borrow_mut().pending_queue.drain(..).collect();
-                pool.borrow_mut().pending_bytes = 0;
 
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
+                pool.borrow_mut().pending_bytes = 0;
+                debug!("TgtPendingBlocksPool - {} bytes, periodic log pending io Done", pending_bytes);
             }
         }
     }

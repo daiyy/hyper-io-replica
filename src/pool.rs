@@ -1,6 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
@@ -11,6 +12,7 @@ use crate::recover::RecoverCtrl;
 use crate::replica::Replica;
 use crate::device::MetaDeviceDesc;
 use crate::task::{TaskState, TaskId};
+use crate::seq::IncrSeq;
 
 pub(crate) enum PendingIo {
     Write(WriteIo),
@@ -22,12 +24,14 @@ pub(crate) struct WriteIo {
     size: u32,
     offset: u64,
     data: IoBuf<u8>,
+    seq: u64,
 }
 
 pub(crate) struct FlushIo {
     flags: u32,
     size: u32,
     offset: u64,
+    seq: u64,
 }
 
 impl fmt::Debug for PendingIo {
@@ -40,13 +44,13 @@ impl fmt::Debug for PendingIo {
 }
 
 impl PendingIo {
-    pub(crate) fn from_iodesc(iod: &ublksrv_io_desc) -> Self {
+    pub(crate) fn from_iodesc(iod: &ublksrv_io_desc, seq: u64) -> Self {
         let size = iod.nr_sectors << 9;
         let offset = iod.start_sector << 9;
         match iod.op_flags & 0xff {
             libublk::sys::UBLK_IO_OP_WRITE => {},
             libublk::sys::UBLK_IO_OP_FLUSH => {
-                return Self::Flush(FlushIo { flags: iod.op_flags, size: size, offset: offset, });
+                return Self::Flush(FlushIo { flags: iod.op_flags, size: size, offset: offset, seq: seq,});
             },
             _ => { panic!("op {:#02x} not implement", iod.op_flags & 0xff); },
         }
@@ -61,6 +65,7 @@ impl PendingIo {
             size: size,
             offset: offset,
             data: data,
+            seq: seq,
         })
     }
 
@@ -93,6 +98,15 @@ impl PendingIo {
         match self {
             Self::Write(io) => &(io.data),
             Self::Flush(_) => panic!("can not deref FlushIo"),
+        }
+    }
+
+    // OP_FLUSH or F_META
+    #[inline]
+    pub(crate) fn seq(&self) -> u64 {
+        match self {
+            Self::Write(io) => io.seq,
+            Self::Flush(io) => io.seq,
         }
     }
 }
@@ -158,21 +172,31 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     pub(crate) replica_device: T,
     pub(crate) rx: channel::Receiver<Vec<PendingIo>>,
     pub(crate) tx: channel::Sender<Vec<PendingIo>>,
+    // staging queue
+    pub(crate) staging_data_queue: Vec<PendingIo>, // for data set without seq flag
+    pub(crate) staging_seq_queue: BTreeMap<u64, Vec<PendingIo>>, // for data set with seq
+    pub(crate) staging_data_queue_bytes: usize,
+    // pending queue for write to replica
     pub(crate) pending_queue: Vec<PendingIo>,
     pub(crate) pending_bytes: usize,
     pub(crate) max_capacity: usize,
     pub(crate) meta_dev_desc: MetaDeviceDesc,
     pub(crate) dev_id: u32,
+    pub(crate) g_seq: IncrSeq,
+    pub(crate) l_seq: u64,
 }
 
 impl<T> TgtPendingBlocksPool<T> {
-    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev_desc: MetaDeviceDesc, dev_id: u32) -> Self
+    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev_desc: MetaDeviceDesc, dev_id: u32, g_seq: IncrSeq) -> Self
         where T: Replica + 'static
     {
         let (tx, rx) = channel::unbounded();
         Self {
             rx: rx,
             tx: tx,
+            staging_data_queue: Vec::new(),
+            staging_seq_queue: BTreeMap::new(),
+            staging_data_queue_bytes: 0,
             pending_queue: Vec::new(),
             pending_bytes: 0,
             max_capacity: max_capacity,
@@ -180,6 +204,8 @@ impl<T> TgtPendingBlocksPool<T> {
             replica_device: replica_device,
             meta_dev_desc,
             dev_id,
+            g_seq,
+            l_seq: 1,
         }
     }
 
@@ -197,6 +223,7 @@ impl<T> TgtPendingBlocksPool<T> {
     {
         info!("TgtPendingBlocksPool started with:");
         info!("  - state {:?}", state);
+        info!("  - global seq {} local seq {}", pool.borrow().g_seq.get(), pool.borrow().l_seq);
         info!("  - region {:?}", region);
         info!("  - replica path {}", pool.borrow().replica_path);
         let rx = pool.borrow().rx.clone();
@@ -204,9 +231,50 @@ impl<T> TgtPendingBlocksPool<T> {
         replica_device.open();
         task_state.set_start(TaskId::Pool);
         while let Ok(mut v) = rx.recv().await {
-            let total_bytes: usize = v.iter().map(|pio| pio.size()).sum();
+            // # go through pending io vec to track pending bytes/ max seq
+            let mut total_bytes = 0;
+            let mut max_seq = 0;
+            for pio in v.iter() {
+                total_bytes += pio.size();
+                max_seq = std::cmp::max(max_seq, pio.seq());
+            }
             pool.borrow_mut().pending_bytes += total_bytes;
-            pool.borrow_mut().pending_queue.append(&mut v);
+            // # update staging data/seq queue with received pending io
+            if max_seq == 0 {
+                pool.borrow_mut().staging_data_queue.append(&mut v);
+                pool.borrow_mut().staging_data_queue_bytes += total_bytes;
+            } else {
+                let None = pool.borrow_mut().staging_seq_queue.insert(max_seq, v) else {
+                    panic!("duplicate glboal seq {} received", max_seq);
+                };
+            }
+            // # try to move data from staging queue to pending queue based on continues seq
+            // check any seq we can find in stating seq queue
+            let mut continue_seq_to_take = Vec::new();
+            let keys: Vec<u64> = pool.borrow().staging_seq_queue.keys().cloned().collect();
+            for seq in keys.into_iter() {
+                if pool.borrow().l_seq != seq {
+                    // if not the seq we waiting for
+                    debug!("TgtPendingBlocksPool - seq discontinued at {}", pool.borrow().l_seq);
+                    break;
+                }
+                continue_seq_to_take.push(seq);
+                pool.borrow_mut().l_seq = seq + 1;
+            }
+            // handle staging data queue before staging seq queue
+            if continue_seq_to_take.len() > 0 {
+                // take all in staging data queue
+                let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
+                pool.borrow_mut().staging_data_queue_bytes = 0;
+                pool.borrow_mut().pending_queue.append(&mut v);
+            }
+            // finally move all continue seq from seq queue into pending queue
+            for seq in continue_seq_to_take.iter() {
+                // take continues seq from stating seq queue
+                let mut v = pool.borrow_mut().staging_seq_queue.remove(seq).expect("failed to get back pending io vec from staging seq queue");
+                pool.borrow_mut().pending_queue.append(&mut v);
+            }
+            // # write to replica from pending queue
             if pool.borrow().pending_bytes >= pool.borrow().max_capacity {
                 debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes exceed max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
@@ -214,11 +282,13 @@ impl<T> TgtPendingBlocksPool<T> {
                 // 1. disable logging
                 // 2. wait incoming queue empty?
                 // 3. write_to_replica
-                let pending = pool.borrow_mut().pending_queue.drain(..).collect();
-                pool.borrow_mut().pending_bytes = 0;
+                let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
+                let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
+                let pending_bytes = pool.borrow().pending_bytes;
 
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
+                pool.borrow_mut().pending_bytes = pending_bytes - bytes;
 
                 state.set_logging_disable();
 
@@ -229,11 +299,13 @@ impl<T> TgtPendingBlocksPool<T> {
                 // 1. add periodic flusher
                 // 2. find last FLUSH in the queue and take out, leave remains in the queue
                 // 3. write_to_replica
-                let pending = pool.borrow_mut().pending_queue.drain(..).collect();
-                pool.borrow_mut().pending_bytes = 0;
+                let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
+                let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
+                let pending_bytes = pool.borrow().pending_bytes;
 
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
+                pool.borrow_mut().pending_bytes = pending_bytes - bytes;
             }
             // yield to prevent long term occupation of this task
             smol::future::yield_now().await;

@@ -30,6 +30,7 @@ use crate::replica::s3_reactor::S3Replica;
 use crate::device::MetaDevice;
 use crate::mgmt_client::MgmtClient;
 use crate::task::{TaskState, TaskManager};
+use crate::seq::IncrSeq;
 
 #[derive(clap::Args, Debug)]
 pub struct IoReplicaArgs {
@@ -140,11 +141,11 @@ std::thread_local! {
 }
 
 #[inline]
-fn pool_append_pending(iod: &ublksrv_io_desc, force_propgate: bool) {
+fn pool_append_pending(iod: &ublksrv_io_desc, seq: u64, force_propgate: bool) {
     PENDING_BLOCKS.with(|pool| {
 
         // copy to pio and append to local pool
-        let pio = PendingIo::from_iodesc(&iod);
+        let pio = PendingIo::from_iodesc(&iod, seq);
         pool.borrow_mut().append(pio);
 
         if force_propgate {
@@ -206,7 +207,7 @@ fn __lo_make_io_sqe(op: u32, off: u64, bytes: u32, buf_addr: *mut u8) -> io_urin
 }
 
 #[inline]
-async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) -> i32 {
+async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, seq: &IncrSeq) -> i32 {
     let iod = q.get_iod(tag);
     let res = __lo_prep_submit_io_cmd(iod);
     if res < 0 {
@@ -247,7 +248,7 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
         if op == libublk::sys::UBLK_IO_OP_FLUSH {
             // if flush op and logging enabled, log this io and return success immediately
             if state::local_state_logging_enabled() {
-                pool_append_pending(&iod, true);
+                pool_append_pending(&iod, seq.next(iod.op_flags), true);
                 return 0;
             }
         }
@@ -261,14 +262,14 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8) 
                 libublk::sys::UBLK_IO_OP_DISCARD |
                 libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
                     if state::local_state_logging_enabled() {
-                        pool_append_pending(&iod, false);
+                        pool_append_pending(&iod, seq.next(iod.op_flags), false);
                     } else {
                         region::local_region_mark_dirty(&iod);
                     }
                 },
                 libublk::sys::UBLK_IO_OP_FLUSH => {
                     if state::local_state_logging_enabled() {
-                        pool_append_pending(&iod, true);
+                        pool_append_pending(&iod, seq.next(iod.op_flags), true);
                     }
                 },
                 _ => {
@@ -349,7 +350,7 @@ fn to_absolute_path(p: PathBuf, parent: Option<PathBuf>) -> PathBuf {
     }
 }
 
-fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *mut u8) {
+fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *mut u8, seq: &IncrSeq) {
     let iod = q.get_iod(tag);
     let op = iod.op_flags & 0xff;
     let data = UblkIOCtx::build_user_data(tag, op, 0, true);
@@ -366,7 +367,7 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
         if res != -(libc::EAGAIN) {
             if op >= 1 && op <= 5 {
                 //UBLK_IO_OP_WRITE | UBLK_IO_OP_WRITE_SAME | UBLK_IO_OP_FLUSH | UBLK_IO_OP_DISCARD | UBLK_IO_OP_WRITE_ZEROES ->
-                pool_append_pending(&iod, true);
+                pool_append_pending(&iod, seq.next(iod.op_flags), true);
             }
             q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(res)));
             return;
@@ -389,7 +390,7 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
     }
 }
 
-fn new_q_fn(qid: u16, dev: &UblkDev) {
+fn new_q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
     let depth = dev.dev_info.queue_depth;
     let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
     let exe = smol::LocalExecutor::new();
@@ -397,6 +398,7 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
 
     for tag in 0..depth {
         let q = q_rc.clone();
+        let seq = g_seq.clone();
 
         f_vec.push(exe.spawn(async move {
             let buf = IoBuf::<u8>::new(q.dev.dev_info.max_io_buf_bytes as usize);
@@ -411,7 +413,7 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
                     break;
                 }
 
-                res = lo_handle_io_cmd_async(&q, tag, buf_addr).await;
+                res = lo_handle_io_cmd_async(&q, tag, buf_addr, &seq).await;
                 cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
             }
         }));
@@ -481,14 +483,15 @@ fn new_q_fn(qid: u16, dev: &UblkDev) {
 }
 
 #[allow(dead_code)]
-fn q_fn(qid: u16, dev: &UblkDev) {
+fn q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
 
     let bufs_rc = Rc::new(dev.alloc_queue_io_bufs());
     let bufs = bufs_rc.clone();
     let lo_io_handler = move |q: &UblkQueue, tag: u16, io: &UblkIOCtx| {
         let bufs = bufs_rc.clone();
+        let seq = g_seq.clone();
 
-        lo_handle_io_cmd_sync(q, tag, io, bufs[tag as usize].as_mut_ptr());
+        lo_handle_io_cmd_sync(q, tag, io, bufs[tag as usize].as_mut_ptr(), &seq);
     };
 
     UblkQueue::new(qid, dev)
@@ -498,7 +501,7 @@ fn q_fn(qid: u16, dev: &UblkDev) {
         .wait_and_handle_io(lo_io_handler);
 }
 
-fn q_a_fn(qid: u16, dev: &UblkDev) {
+fn q_a_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
     let depth = dev.dev_info.queue_depth;
     let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
     let exe = smol::LocalExecutor::new();
@@ -506,6 +509,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
 
     for tag in 0..depth {
         let q = q_rc.clone();
+        let seq = g_seq.clone();
 
         f_vec.push(exe.spawn(async move {
             let buf = IoBuf::<u8>::new(q.dev.dev_info.max_io_buf_bytes as usize);
@@ -520,7 +524,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev) {
                     break;
                 }
 
-                res = lo_handle_io_cmd_async(&q, tag, buf_addr).await;
+                res = lo_handle_io_cmd_async(&q, tag, buf_addr, &seq).await;
                 cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
             }
         }));
@@ -717,15 +721,17 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         client.grace_shutdown();
     }).expect("Failed to set shutdown handler");
 
+    let g_seq = IncrSeq::new();
+
     // create a task state tracker
     let task_state = TaskState::new();
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
-        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc, dev_id);
+        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc, dev_id, g_seq.clone());
         let _tx = tgt.get_tx_chan();
         let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
     } else {
-        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc, dev_id);
+        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc, dev_id, g_seq.clone());
         let _tx = tgt.get_tx_chan();
         let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
@@ -750,7 +756,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
         move |qid, dev: &_| if aa {
-            q_a_fn(qid, dev)
+            q_a_fn(qid, dev, g_seq)
         } else {
             // setup thread local pending blocks pool
             let pool = LocalPendingBlocksPool::new(local_pool_sz as usize, tx);
@@ -773,7 +779,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             // setup thread local region shift value
             LOCAL_REGION_SHIFT.set(region_shift);
 
-            new_q_fn(qid, dev)
+            new_q_fn(qid, dev, g_seq)
         },
         move |ctrl: &UblkCtrl| crate::rublk_prep_dump_dev(_shm, fg, ctrl),
     )

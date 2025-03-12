@@ -31,6 +31,7 @@ mod metadata;
 mod mgmt_proto;
 mod mgmt_client;
 mod task;
+mod seq;
 
 #[derive(Parser)]
 #[command(version)]
