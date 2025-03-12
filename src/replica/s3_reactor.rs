@@ -105,10 +105,10 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         }
         let b = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
         let (ctx, tx, mut rx) = FileContext::new_write(b, offset as usize, self.handler.clone());
-        self.state.set_read();
+        self.state.set_write();
         self.handler.send(ctx);
         let res = rx.recv().await.expect("task channel closed");
-        self.state.clear_read();
+        self.state.clear_write();
         drop(tx);
         res
     }
