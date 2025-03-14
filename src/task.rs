@@ -85,8 +85,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         loop {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
             if pool.borrow().is_logging_active() { continue; }
-            let pending_bytes = pool.borrow().pending_bytes;
-            if pending_bytes > 0 {
+            if pool.borrow().pending_bytes > 0 {
                 debug!("TgtPendingBlocksPool periodic task log pending - {}", pool.borrow().get_stats());
                 // take all in staging data queue
                 let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
@@ -95,14 +94,13 @@ impl<T: Replica + 'static> TaskManager<T> {
                 // tak all from pending queue
                 let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
                 let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
-                assert!(bytes == pending_bytes);
 
                 pool.borrow_mut().inflight_bytes = bytes;
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
                 pool.borrow_mut().inflight_bytes = 0;
-                pool.borrow_mut().pending_bytes = 0;
-                debug!("TgtPendingBlocksPool periodic task log pending - {} bytes pending io logged to replica", pending_bytes);
+                pool.borrow_mut().pending_bytes -= bytes;
+                debug!("TgtPendingBlocksPool periodic task log pending - {} bytes pending io logged to replica", bytes);
             }
         }
     }
