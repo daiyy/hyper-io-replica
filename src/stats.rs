@@ -6,8 +6,14 @@ use crate::state;
 
 #[derive(Serialize, Deserialize)]
 pub struct PoolStats {
-    pending_bytes: usize,
-    max_capacity: usize,
+    pub(crate) staging_data_queue_len: usize,
+    pub(crate) staging_data_queue_bytes: usize,
+    pub(crate) staging_seq_queue_len: usize,
+    pub(crate) staging_seq_queue_bytes: usize,
+    pub(crate) pending_queue_len: usize,
+    pub(crate) pending_bytes: usize,
+    pub(crate) inflight_bytes: usize,
+    pub(crate) max_capacity: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,12 +81,7 @@ impl<T> Stats<T> {
         };
 
         // pool
-        let pool = self.global.pool.borrow();
-        let (p, m) = pool.get_stats();
-        let pool = PoolStats {
-            pending_bytes: p,
-            max_capacity: m,
-        };
+        let pool = self.global.pool.borrow().get_stats();
 
         StatsCollection {
             state: state,

@@ -13,6 +13,7 @@ use crate::replica::Replica;
 use crate::device::MetaDeviceDesc;
 use crate::task::{TaskState, TaskId};
 use crate::seq::IncrSeq;
+use crate::stats::PoolStats;
 
 pub(crate) enum PendingIo {
     Write(WriteIo),
@@ -213,8 +214,17 @@ impl<T> TgtPendingBlocksPool<T> {
         }
     }
 
-    pub(crate) fn get_stats(&self) -> (usize, usize) {
-        (self.pending_bytes, self.max_capacity)
+    pub(crate) fn get_stats(&self) -> PoolStats {
+        PoolStats {
+            staging_data_queue_len: self.staging_data_queue.len(),
+            staging_data_queue_bytes: self.staging_data_queue_bytes,
+            staging_seq_queue_len: self.staging_seq_queue.len(),
+            staging_seq_queue_bytes: self.staging_seq_queue_bytes,
+            pending_queue_len: self.pending_queue.len(),
+            pending_bytes: self.pending_bytes,
+            inflight_bytes: self.inflight_bytes,
+            max_capacity: self.max_capacity,
+        }
     }
 
     pub(crate) fn get_tx_chan(&self) -> channel::Sender<Vec<PendingIo>> {
