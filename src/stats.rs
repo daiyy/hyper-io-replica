@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::atomic::Ordering;
 use serde::{Serialize, Deserialize};
 use crate::recover::RecoverState;
@@ -14,6 +15,15 @@ pub struct PoolStats {
     pub(crate) pending_bytes: usize,
     pub(crate) inflight_bytes: usize,
     pub(crate) max_capacity: usize,
+}
+
+impl fmt::Display for PoolStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PoolStats - {}/({}|{}){}/{} inflight/(data|seq)pending/capacity, qlen: ({}|{}){} (data|seq)pending",
+            self.inflight_bytes, self.staging_data_queue_bytes, self.staging_seq_queue_bytes, self.pending_bytes, self.max_capacity,
+            self.staging_data_queue_len, self.staging_seq_queue_len, self.pending_queue_len
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize)]
