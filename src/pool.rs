@@ -274,7 +274,7 @@ impl<T> TgtPendingBlocksPool<T> {
             for seq in keys.into_iter() {
                 if pool.borrow().l_seq != seq {
                     // if not the seq we waiting for
-                    debug!("TgtPendingBlocksPool - seq discontinued at {}", pool.borrow().l_seq);
+                    debug!("TgtPendingBlocksPool main task - seq discontinued at {}", pool.borrow().l_seq);
                     break;
                 }
                 continue_seq_to_take.push(seq);
@@ -302,7 +302,7 @@ impl<T> TgtPendingBlocksPool<T> {
             // # time to trigger write to replica
             // # write to replica from pending queue
             if pool.borrow().pending_bytes >= pool.borrow().max_capacity {
-                debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes exceed max capacity {}",
+                debug!("TgtPendingBlocksPool main task - {} of pending IO, total {} bytes exceed max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
                 // TODO: change process to
                 // 1. disable logging
@@ -321,7 +321,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 state.set_logging_disable();
 
             } else if pool.borrow().pending_bytes >= pool.borrow().max_capacity / 2 {
-                debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes exceed 1/2 max capacity {}",
+                debug!("TgtPendingBlocksPool main task - {} of pending IO, total {} bytes exceed 1/2 max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
                 // TODO: change process to
                 // 1. add periodic flusher

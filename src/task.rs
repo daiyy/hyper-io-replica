@@ -86,11 +86,8 @@ impl<T: Replica + 'static> TaskManager<T> {
             smol::Timer::after(std::time::Duration::from_secs(1)).await;
             if pool.borrow().is_logging_active() { continue; }
             let pending_bytes = pool.borrow().pending_bytes;
-            let pending_queue_len = pool.borrow().pending_queue.len();
-            let staging_data_queue_len = pool.borrow().staging_data_queue.len();
             if pending_bytes > 0 {
-                debug!("TgtPendingBlocksPool - {} of pending IO, {} of staging data pending IO, total {} bytes, periodic log pending io",
-                    pending_queue_len, staging_data_queue_len, pending_bytes);
+                debug!("TgtPendingBlocksPool periodic task log pending - {}", pool.borrow().get_stats());
                 // take all in staging data queue
                 let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
                 pool.borrow_mut().staging_data_queue_bytes = 0;
@@ -105,7 +102,7 @@ impl<T: Replica + 'static> TaskManager<T> {
                 assert!(segid == 0);
                 pool.borrow_mut().inflight_bytes = 0;
                 pool.borrow_mut().pending_bytes = 0;
-                debug!("TgtPendingBlocksPool - {} bytes, periodic log pending io Done", pending_bytes);
+                debug!("TgtPendingBlocksPool periodic task log pending - {} bytes pending io logged to replica", pending_bytes);
             }
         }
     }
@@ -125,7 +122,7 @@ impl<T: Replica + 'static> TaskManager<T> {
             if pool.borrow().is_logging_active() { continue; }
             let now = SystemTime::now();
             let cno = replica_device.flush().await.expect("replica deivce flush failed");
-            debug!("TgtPendingBlocksPool - periodic replica flush done - segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
+            debug!("TgtPendingBlocksPool periodic task replica flush - done with segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
             if last_replica_ondisk_cno < cno && last_primary_metadata_cno < cno {
                 // only sync log entry cno for an effective replica flush
                 let _ = meta_dev.flush_log_sync(cno).await;
