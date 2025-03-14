@@ -269,6 +269,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 pool.borrow_mut().pending_queue.append(&mut v);
             }
             // finally move all continue seq from seq queue into pending queue
+            // TODO: replace for loop by btreemap split_off
             for seq in continue_seq_to_take.iter() {
                 // take continues seq from stating seq queue
                 let mut v = pool.borrow_mut().staging_seq_queue.remove(seq).expect("failed to get back pending io vec from staging seq queue");
