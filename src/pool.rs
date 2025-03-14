@@ -179,6 +179,7 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     // pending queue for write to replica
     pub(crate) pending_queue: Vec<PendingIo>,
     pub(crate) pending_bytes: usize,
+    pub(crate) inflight_bytes: usize, // track inflight bytes logging to replica
     pub(crate) max_capacity: usize,
     pub(crate) meta_dev_desc: MetaDeviceDesc,
     pub(crate) dev_id: u32,
@@ -199,6 +200,7 @@ impl<T> TgtPendingBlocksPool<T> {
             staging_data_queue_bytes: 0,
             pending_queue: Vec::new(),
             pending_bytes: 0,
+            inflight_bytes: 0,
             max_capacity: max_capacity,
             replica_path: replica_path.to_string(),
             replica_device: replica_device,
@@ -215,6 +217,10 @@ impl<T> TgtPendingBlocksPool<T> {
 
     pub(crate) fn get_tx_chan(&self) -> channel::Sender<Vec<PendingIo>> {
         self.tx.clone()
+    }
+
+    pub(crate) fn is_logging_active(&self) -> bool {
+        self.inflight_bytes > 0
     }
 
     pub(crate) async fn main_loop(pool: Rc<RefCell<Self>>, state: Rc<GlobalTgtState>,
@@ -275,6 +281,10 @@ impl<T> TgtPendingBlocksPool<T> {
                 let mut v = pool.borrow_mut().staging_seq_queue.remove(seq).expect("failed to get back pending io vec from staging seq queue");
                 pool.borrow_mut().pending_queue.append(&mut v);
             }
+
+            // test if replica is available
+            if pool.borrow().is_logging_active() { continue; }
+
             // # time to trigger write to replica
             // # write to replica from pending queue
             if pool.borrow().pending_bytes >= pool.borrow().max_capacity {
@@ -288,8 +298,10 @@ impl<T> TgtPendingBlocksPool<T> {
                 let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
                 let pending_bytes = pool.borrow().pending_bytes;
 
+                pool.borrow_mut().inflight_bytes = bytes;
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
+                pool.borrow_mut().inflight_bytes = 0;
                 pool.borrow_mut().pending_bytes = pending_bytes - bytes;
 
                 state.set_logging_disable();
@@ -305,8 +317,10 @@ impl<T> TgtPendingBlocksPool<T> {
                 let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
                 let pending_bytes = pool.borrow().pending_bytes;
 
+                pool.borrow_mut().inflight_bytes = bytes;
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
+                pool.borrow_mut().inflight_bytes = 0;
                 pool.borrow_mut().pending_bytes = pending_bytes - bytes;
             }
             // yield to prevent long term occupation of this task
