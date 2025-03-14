@@ -174,8 +174,9 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     pub(crate) tx: channel::Sender<Vec<PendingIo>>,
     // staging queue
     pub(crate) staging_data_queue: Vec<PendingIo>, // for data set without seq flag
-    pub(crate) staging_seq_queue: BTreeMap<u64, Vec<PendingIo>>, // for data set with seq
     pub(crate) staging_data_queue_bytes: usize,
+    pub(crate) staging_seq_queue: BTreeMap<u64, (Vec<PendingIo>, usize)>, // for data set with seq
+    pub(crate) staging_seq_queue_bytes: usize,
     // pending queue for write to replica
     pub(crate) pending_queue: Vec<PendingIo>,
     pub(crate) pending_bytes: usize,
@@ -196,8 +197,9 @@ impl<T> TgtPendingBlocksPool<T> {
             rx: rx,
             tx: tx,
             staging_data_queue: Vec::new(),
-            staging_seq_queue: BTreeMap::new(),
             staging_data_queue_bytes: 0,
+            staging_seq_queue: BTreeMap::new(),
+            staging_seq_queue_bytes: 0,
             pending_queue: Vec::new(),
             pending_bytes: 0,
             inflight_bytes: 0,
@@ -250,9 +252,10 @@ impl<T> TgtPendingBlocksPool<T> {
                 pool.borrow_mut().staging_data_queue.append(&mut v);
                 pool.borrow_mut().staging_data_queue_bytes += total_bytes;
             } else {
-                let None = pool.borrow_mut().staging_seq_queue.insert(max_seq, v) else {
+                let None = pool.borrow_mut().staging_seq_queue.insert(max_seq, (v, total_bytes)) else {
                     panic!("duplicate glboal seq {} received", max_seq);
                 };
+                pool.borrow_mut().staging_seq_queue_bytes += total_bytes;
             }
             // # try to move data from staging queue to pending queue based on continues seq
             // check any seq we can find in stating seq queue
@@ -278,7 +281,8 @@ impl<T> TgtPendingBlocksPool<T> {
             // TODO: replace for loop by btreemap split_off
             for seq in continue_seq_to_take.iter() {
                 // take continues seq from stating seq queue
-                let mut v = pool.borrow_mut().staging_seq_queue.remove(seq).expect("failed to get back pending io vec from staging seq queue");
+                let (mut v, bytes) = pool.borrow_mut().staging_seq_queue.remove(seq).expect("failed to get back pending io vec from staging seq queue");
+                pool.borrow_mut().staging_seq_queue_bytes -= bytes;
                 pool.borrow_mut().pending_queue.append(&mut v);
             }
 
