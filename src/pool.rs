@@ -274,6 +274,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 let mut v = pool.borrow_mut().staging_seq_queue.remove(seq).expect("failed to get back pending io vec from staging seq queue");
                 pool.borrow_mut().pending_queue.append(&mut v);
             }
+            // # time to trigger write to replica
             // # write to replica from pending queue
             if pool.borrow().pending_bytes >= pool.borrow().max_capacity {
                 debug!("TgtPendingBlocksPool - {} of pending IO, total {} bytes exceed max capacity {}",
