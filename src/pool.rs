@@ -310,6 +310,12 @@ impl<T> TgtPendingBlocksPool<T> {
                 // 1. disable logging
                 // 2. wait incoming queue empty?
                 // 3. write_to_replica
+
+                // take all in staging data queue
+                let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
+                pool.borrow_mut().staging_data_queue_bytes = 0;
+                pool.borrow_mut().pending_queue.append(&mut v);
+
                 let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
                 let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
 
