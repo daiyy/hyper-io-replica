@@ -1,18 +1,20 @@
 use std::io::Result;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use smol::lock::RwLock;
 use tokio::runtime;
 use super::{Replica, ReplicaState};
 use crate::replica::PendingIo;
-use s3_hyperfile::s3uri::S3Uri;
-use s3_hyperfile::file::hyper::Hyper;
-use s3_hyperfile::file::flags::FileFlags;
+use crate::utils;
+use hyperfile::s3uri::S3Uri;
+use hyperfile::file::hyper::Hyper;
+use hyperfile::file::flags::FileFlags;
+use hyperfile::config::HyperFileRuntimeConfig;
 
 pub struct S3Replica<'a> {
     pub device_path: String,
     pub file: Arc<RwLock<Hyper<'a>>>,
     pub rt: Arc<runtime::Runtime>,
+    pub stat: libc::stat,
     pub state: ReplicaState,
 }
 
@@ -20,16 +22,23 @@ impl<'a: 'static> S3Replica<'a> {
     pub fn init(dev_path: &str) -> Self {
         let rt = Arc::new(runtime::Runtime::new().unwrap());
         if let Ok(s3uri) = S3Uri::parse(dev_path) {
-            let hyper = rt.block_on(async {
+            let (hyper, stat) = rt.block_on(async {
                 let config = aws_config::load_from_env().await;
                 let client = aws_sdk_s3::Client::new(&config);
                 let flags = FileFlags::from(libc::O_RDWR);
-                Hyper::fs_open(&client, s3uri.bucket, s3uri.key, flags).await.expect("failed to open hyper file")
+                let _ = s3uri;
+                let mut runtime_config = HyperFileRuntimeConfig::default_large();
+                // disable hyper file internal max flush interval threshold
+                runtime_config.data_cache_dirty_max_flush_interval = u64::MAX;
+                let hyper = Hyper::fs_open_opt(&client, dev_path, flags, &runtime_config).await.expect("failed to open hyper file");
+                let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
+                (hyper, stat)
             });
             return Self {
                 device_path: dev_path.to_string(),
                 file: Arc::new(RwLock::new(hyper)),
                 rt: rt,
+                stat: stat,
                 state: ReplicaState::new(),
             };
         }
@@ -48,6 +57,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             device_path: self.device_path.to_owned(),
             file: self.file.clone(),
             rt: self.rt.clone(),
+            stat: self.stat.clone(),
             state: self.state.clone(),
         }
     }
@@ -70,7 +80,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let res = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
-                lock.fs_read(b, offset as usize).await
+                lock.fs_read(offset as usize, b).await
             })
         }).await;
         self.state.clear_read();
@@ -79,7 +89,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn write(&self, offset: u64, buf: &[u8]) -> Result<usize> {
         if utils::is_all_zeros(buf) {
-            match self.write_zero(offset, len as u64).await {
+            match self.write_zero(offset, buf.len() as u64).await {
                 Ok(len) => { return Ok(len); },
                 Err(_) => { /* failback to physical write */ },
             }
@@ -91,7 +101,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let res = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
-                lock.fs_write(b, offset as usize).await
+                lock.fs_write(offset as usize, b).await
             })
         }).await;
         self.state.clear_write();
@@ -132,7 +142,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         let segid = smol::unblock(move || {
             rt.block_on(async {
                 let mut lock = hyper.write().await;
-                lock.fs_release(false).await
+                lock.fs_release().await
             })
         }).await?;
         self.state.set_closed();
@@ -162,10 +172,10 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn last_cno(&self) -> u64 {
-        self.file.read().await.last_cno()
+        self.file.read().await.fs_last_cno()
     }
 
     fn is_active(&self) -> bool {
-        self.state.is_activity()
+        self.state.is_active()
     }
 }
