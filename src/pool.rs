@@ -310,13 +310,12 @@ impl<T> TgtPendingBlocksPool<T> {
                 // 3. write_to_replica
                 let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
                 let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
-                let pending_bytes = pool.borrow().pending_bytes;
 
                 pool.borrow_mut().inflight_bytes = bytes;
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
                 pool.borrow_mut().inflight_bytes = 0;
-                pool.borrow_mut().pending_bytes = pending_bytes - bytes;
+                pool.borrow_mut().pending_bytes -= bytes;
 
                 state.set_logging_disable();
 
@@ -329,13 +328,12 @@ impl<T> TgtPendingBlocksPool<T> {
                 // 3. write_to_replica
                 let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
                 let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
-                let pending_bytes = pool.borrow().pending_bytes;
 
                 pool.borrow_mut().inflight_bytes = bytes;
                 let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
                 assert!(segid == 0);
                 pool.borrow_mut().inflight_bytes = 0;
-                pool.borrow_mut().pending_bytes = pending_bytes - bytes;
+                pool.borrow_mut().pending_bytes -= bytes;
             }
             // yield to prevent long term occupation of this task
             smol::future::yield_now().await;
