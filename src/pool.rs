@@ -295,6 +295,8 @@ impl<T> TgtPendingBlocksPool<T> {
                 pool.borrow_mut().staging_seq_queue_bytes -= bytes;
                 pool.borrow_mut().pending_queue.append(&mut v);
             }
+            // now, all seq pending io and scatter data pending io will be put on pending queue
+            // # end of queue prepare process
 
             // test if replica is available
             if pool.borrow().is_logging_active() { continue; }
