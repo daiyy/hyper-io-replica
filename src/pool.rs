@@ -326,10 +326,11 @@ impl<T> TgtPendingBlocksPool<T> {
             } else if pool.borrow().pending_bytes >= pool.borrow().max_capacity / 2 {
                 debug!("TgtPendingBlocksPool main task - {} of pending IO, total {} bytes exceed 1/2 max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
-                // TODO: change process to
-                // 1. add periodic flusher
-                // 2. find last FLUSH in the queue and take out, leave remains in the queue
-                // 3. write_to_replica
+                // take all in staging data queue
+                let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
+                pool.borrow_mut().staging_data_queue_bytes = 0;
+                pool.borrow_mut().pending_queue.append(&mut v);
+
                 let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
                 let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
 
