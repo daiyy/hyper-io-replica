@@ -306,10 +306,9 @@ impl<T> TgtPendingBlocksPool<T> {
             if pool.borrow().pending_bytes >= pool.borrow().max_capacity {
                 debug!("TgtPendingBlocksPool main task - {} of pending IO, total {} bytes exceed max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
-                // TODO: change process to
-                // 1. disable logging
-                // 2. wait incoming queue empty?
-                // 3. write_to_replica
+
+                state.set_logging_disable();
+                // TODO: cancel all pending io after logging disabled
 
                 // take all in staging data queue
                 let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
@@ -324,9 +323,6 @@ impl<T> TgtPendingBlocksPool<T> {
                 assert!(segid == 0);
                 pool.borrow_mut().inflight_bytes = 0;
                 pool.borrow_mut().pending_bytes -= bytes;
-
-                state.set_logging_disable();
-
             } else if pool.borrow().pending_bytes >= pool.borrow().max_capacity / 2 {
                 debug!("TgtPendingBlocksPool main task - {} of pending IO, total {} bytes exceed 1/2 max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
