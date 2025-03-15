@@ -156,6 +156,10 @@ impl GlobalTgtState {
         self.inner.load(Ordering::SeqCst)
     }
 
+    pub(crate) fn is_logging_enabled(&self) -> bool {
+        self.inner.load(Ordering::SeqCst) & TGT_STATE_LOGGING_ENABLED == TGT_STATE_LOGGING_ENABLED
+    }
+
     pub(crate) fn is_recovery(&self) -> bool {
         let recovery_state = TGT_STATE_RECOVERY_FORWARD_FULL | TGT_STATE_RECOVERY_FORWARD_PART | TGT_STATE_RECOVERY_REVERSE_FULL;
         self.inner.load(Ordering::SeqCst) & recovery_state > 0

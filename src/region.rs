@@ -73,7 +73,6 @@ impl Region {
         self.region_shift
     }
 
-    #[allow(dead_code)]
     // convert to region id
     // return: region id
     #[inline]

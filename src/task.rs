@@ -15,7 +15,6 @@ use crate::mgmt::CommandChannel;
 use crate::replica::Replica;
 use crate::pool::TgtPendingBlocksPool;
 use crate::device::MetaDevice;
-use crate::pool::PendingIo;
 
 #[repr(u64)]
 pub(crate) enum TaskId {
@@ -82,26 +81,10 @@ impl<T: Replica + 'static> TaskManager<T> {
         let replica_device = pool.borrow().replica_device.dup().await;
         task_state.wait_on_tgt_pool_start().await;
         task_state.set_start(TaskId::Periodic);
+        let _ = replica_device;
         loop {
-            smol::Timer::after(std::time::Duration::from_secs(1)).await;
-            if pool.borrow().is_logging_active() { continue; }
-            if pool.borrow().pending_bytes > 0 {
-                debug!("TgtPendingBlocksPool periodic task log pending - {}", pool.borrow().get_stats());
-                // take all in staging data queue
-                let mut v = pool.borrow_mut().staging_data_queue.drain(..).collect();
-                pool.borrow_mut().staging_data_queue_bytes = 0;
-                pool.borrow_mut().pending_queue.append(&mut v);
-                // tak all from pending queue
-                let pending: Vec<PendingIo> = pool.borrow_mut().pending_queue.drain(..).collect();
-                let bytes: usize = pending.iter().map(|pio| pio.size()).sum();
-
-                pool.borrow_mut().inflight_bytes = bytes;
-                let segid = replica_device.log_pending_io(pending, false).await.expect("failed to log pending io");
-                assert!(segid == 0);
-                pool.borrow_mut().inflight_bytes = 0;
-                pool.borrow_mut().pending_bytes -= bytes;
-                debug!("TgtPendingBlocksPool periodic task log pending - {} bytes pending io logged to replica", bytes);
-            }
+            smol::Timer::after(std::time::Duration::from_secs(5)).await;
+            debug!("TgtPendingBlocksPool - {}", pool.borrow().get_stats());
         }
     }
 
@@ -117,7 +100,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         task_state.set_start(TaskId::PeriodicReplicaFlush);
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
-            if pool.borrow().is_logging_active() { continue; }
+            if pool.borrow().is_replica_busy() { continue; }
             let now = SystemTime::now();
             let cno = replica_device.flush().await.expect("replica deivce flush failed");
             debug!("TgtPendingBlocksPool periodic task replica flush - done with segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
