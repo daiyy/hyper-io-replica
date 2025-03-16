@@ -50,6 +50,16 @@ impl TaskState {
         let _ = self.inner.fetch_or(id as u64, Ordering::SeqCst);
     }
 
+    pub(crate) fn set_stop(&self, id: TaskId) {
+        let _ = self.inner.fetch_and(!(id as u64), Ordering::SeqCst);
+    }
+
+    pub(crate) fn is_open(&self, id: TaskId) -> bool {
+        let state = self.inner.load(Ordering::SeqCst);
+        let task_id = id as u64;
+        state & task_id == task_id
+    }
+
     pub(crate) fn is_all_started(&self) -> bool {
        if self.inner.load(Ordering::SeqCst) == Self::all_tasks() {
            return true;
@@ -125,6 +135,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
             if pool.borrow().is_replica_busy() { continue; }
+            if !task_state.is_open(TaskId::PeriodicReplicaFlush) { continue; }
             task_state.set_busy(TaskId::PeriodicReplicaFlush);
             let now = SystemTime::now();
             let cno = replica_device.flush().await.expect("replica deivce flush failed");
@@ -232,6 +243,10 @@ impl<T: Replica + 'static> TaskManager<T> {
         }
         smol::future::yield_now().await;
 
+        // stop flusher
+        task_state.set_stop(TaskId::PeriodicReplicaFlush);
+        smol::future::yield_now().await;
+
         task_state.wait_on_all_tasks_idle().await;
         smol::future::yield_now().await;
 
@@ -242,11 +257,17 @@ impl<T: Replica + 'static> TaskManager<T> {
         }
         smol::future::yield_now().await;
 
-        let _ = replica.close().await;
-
-        // finally close superblock
+        // open meta dev for last flush
         let meta_dev_desc = pool.borrow().meta_dev_desc.clone();
         let mut meta_dev = MetaDevice::open(&meta_dev_desc).await;
+        let entry = meta_dev.flush_log.last_entry();
+        let last_primary_metadata_cno = entry.cno;
+        let cno = replica.close().await?;
+        if  last_primary_metadata_cno < cno {
+            let _ = meta_dev.flush_log_sync(cno).await;
+        }
+
+        // finally close superblock
         let _ = meta_dev.sb_close_sync().await;
 
         std::process::exit(0);
