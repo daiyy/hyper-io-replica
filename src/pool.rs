@@ -1,7 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{HashMap, BTreeMap};
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
@@ -306,24 +306,45 @@ impl<T> TgtPendingBlocksPool<T> {
         true
     }
 
-    pub(crate) fn process_pending(&mut self, mut v: Vec<PendingIo>) {
+    pub(crate) fn process_pending(&mut self, input: Vec<PendingIo>) {
         // # go through pending io vec to track pending bytes/ max seq
+        // group input vec of pending io by seq if we can
         let mut total_bytes = 0;
         let mut max_seq = 0;
-        for pio in v.iter() {
+        let mut seq_grp_bytes = 0;
+        let mut seq_map: HashMap<u64, (Vec<PendingIo>, usize)> = HashMap::new();
+        let mut v = Vec::new(); // temp list to hold Non-seq pending io
+        for pio in input.into_iter() {
             total_bytes += pio.size();
-            max_seq = std::cmp::max(max_seq, pio.seq());
+            seq_grp_bytes += pio.size();
+            let pio_seq = pio.seq();
+            v.push(pio);
+            if pio_seq > 0 {
+                let mut grp = Vec::new();
+                grp.append(&mut v);
+                // create and insert new group to seq map
+                let None = seq_map.insert(pio_seq, (grp, seq_grp_bytes)) else {
+                    panic!("duplicate seq {} from input", pio_seq);
+                };
+                seq_grp_bytes = 0;
+                max_seq = std::cmp::max(max_seq, pio_seq);
+            }
         }
         self.pending_bytes += total_bytes;
         // # update staging data/seq queue with received pending io
         if max_seq == 0 {
+            assert!(seq_map.len() == 0);
             self.staging_data_queue.append(&mut v);
             self.staging_data_queue_bytes += total_bytes;
         } else {
-            let None = self.staging_seq_queue.insert(max_seq, (v, total_bytes)) else {
-                panic!("duplicate glboal seq {} received", max_seq);
-            };
-            self.staging_seq_queue_bytes += total_bytes;
+            let mut grp_bytes = 0;
+            for (seq, (grp, bytes)) in seq_map.into_iter() {
+                grp_bytes += bytes;
+                let None = self.staging_seq_queue.insert(seq, (grp, bytes)) else {
+                    panic!("duplicate glboal seq {} received", seq);
+                };
+            }
+            self.staging_seq_queue_bytes += grp_bytes;
         }
         // # try to move data from staging queue to pending queue based on continues seq
         // check any seq we can find in stating seq queue
@@ -354,6 +375,15 @@ impl<T> TgtPendingBlocksPool<T> {
             self.pending_queue.append(&mut v);
         }
         // now, all seq pending io and scatter data pending io has been put on pending queue
+
+        // last things:
+        // if we still have some ungroup bytes, let's put this onto staging_data_queue,
+        // let them waiit on future seq
+        if v.len() > 0 {
+            let bytes: usize = v.iter().map(|pio| pio.size()).sum();
+            self.staging_data_queue.append(&mut v);
+            self.staging_data_queue_bytes += bytes;
+        }
         // # end of queue prepare process
     }
 
