@@ -386,7 +386,6 @@ impl<T> TgtPendingBlocksPool<T> {
 
             // logging disabled, log dirty region instead
             if !state.is_logging_enabled() {
-                debug!("TgtPendingBlocksPool main task - global logging disabled");
                 Self::log_as_dirty_region(pool.clone(), region.clone(), state.clone(), Vec::new());
                 continue;
             }
