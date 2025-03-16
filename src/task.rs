@@ -86,7 +86,7 @@ impl TaskState {
                 // if all tasks are not in busy
                 break;
             } else {
-                smol::Timer::after(Duration::from_millis(10)).await;
+                smol::Timer::after(Duration::from_secs(5)).await;
             }
         }
     }
@@ -211,34 +211,36 @@ impl<T: Replica + 'static> TaskManager<T> {
         smol::unblock(move || {
             Self::stop_ublk_dev(dev_id)
         }).await?;
+        debug!("TaskManager - stop wait - ublk dev stopped");
+        smol::future::yield_now().await;
 
         // wait any recover complete
         while state.is_recovery() {
+            debug!("TaskManager - stop wait - is recovering");
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
         }
+
+        // wait 2s for local pool send data to channel
+        smol::Timer::after(std::time::Duration::from_secs(2)).await;
+        smol::future::yield_now().await;
 
         // wait pending io channel empty
         let rx = pool.borrow().rx.clone();
-        while !rx.is_empty() {
+        while !rx.is_empty() || pool.borrow().get_stats().is_active() {
+            debug!("TaskManager - stop wait - queue is empty {}, pool is active {}", rx.is_empty(), pool.borrow().get_stats().is_active());
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
         }
-
-        // wait pending queue empty
-        while pool.borrow().pending_queue.len() > 0 {
-            smol::Timer::after(std::time::Duration::from_secs(5)).await;
-        }
-
-        // wait pending bytes to 0
-        while pool.borrow().pending_bytes > 0 {
-            smol::Timer::after(std::time::Duration::from_secs(5)).await;
-        }
+        smol::future::yield_now().await;
 
         task_state.wait_on_all_tasks_idle().await;
+        smol::future::yield_now().await;
 
         let replica = pool.borrow().replica_device.dup().await;
         while replica.is_active() {
+            debug!("TaskManager - stop wait - replica is active");
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
         }
+        smol::future::yield_now().await;
 
         let _ = replica.close().await;
 
