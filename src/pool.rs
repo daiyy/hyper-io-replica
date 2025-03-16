@@ -401,6 +401,11 @@ impl<T> TgtPendingBlocksPool<T> {
                 continue;
             }
 
+            // if rx is not empty, chance to get more
+            if !rx.is_empty() {
+                continue;
+            }
+
             // test if replica is busy
             if pool.borrow().is_replica_busy() {
                 debug!("TgtPendingBlocksPool main task - replica is busy");
