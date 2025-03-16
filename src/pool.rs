@@ -5,7 +5,7 @@ use std::collections::{HashMap, BTreeMap};
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
-use log::{info, debug};
+use log::{info, debug, trace};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
@@ -353,11 +353,12 @@ impl<T> TgtPendingBlocksPool<T> {
         for seq in keys.into_iter() {
             if self.l_seq != seq {
                 // if not the seq we waiting for
-                debug!("TgtPendingBlocksPool main task - seq discontinued at {}", self.l_seq);
+                trace!("TgtPendingBlocksPool main task - seq discontinued at {} for {}", self.l_seq, seq);
                 break;
             }
             continue_seq_to_take.push(seq);
             self.l_seq = seq + 1;
+            trace!("TgtPendingBlocksPool main task - seq continue to {} from {}", self.l_seq, seq);
         }
         // handle staging data queue before staging seq queue
         if continue_seq_to_take.len() > 0 {
