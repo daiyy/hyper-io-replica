@@ -83,8 +83,11 @@ impl<T: Replica + 'static> TaskManager<T> {
         task_state.set_start(TaskId::Periodic);
         let _ = replica_device;
         loop {
-            smol::Timer::after(std::time::Duration::from_secs(5)).await;
-            debug!("TgtPendingBlocksPool - {}", pool.borrow().get_stats());
+            smol::Timer::after(std::time::Duration::from_secs(1)).await;
+            let stats = pool.borrow().get_stats();
+            if stats.is_active() {
+                debug!("TgtPendingBlocksPool - {}", stats);
+            }
         }
     }
 

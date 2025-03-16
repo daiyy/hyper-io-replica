@@ -17,6 +17,18 @@ pub struct PoolStats {
     pub(crate) max_capacity: usize,
 }
 
+impl PoolStats {
+    pub(crate) fn is_active(&self) -> bool {
+        if self.staging_data_queue_len > 0 || self.staging_data_queue_bytes > 0 ||
+            self.staging_seq_queue_len > 0 || self.staging_seq_queue_bytes > 0 ||
+            self.pending_queue_len > 0 || self.pending_bytes > 0 || self.inflight_bytes > 0
+        {
+            return true;
+        }
+        false
+    }
+}
+
 impl fmt::Display for PoolStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "PoolStats - {}/({}|{}){}/{} inflight/(data|seq)pending/capacity, qlen: ({}|{}){} (data|seq)pending",
