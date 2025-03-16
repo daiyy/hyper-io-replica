@@ -30,23 +30,27 @@ impl<'a: 'static> S3Replica<'a> {
                     .build()
                     .unwrap()
             );
-            let spawner = LocalSpawner::new(Some(rt.clone()));
-            let (hyper, stat) = rt.block_on(async {
-                let config = aws_config::load_from_env().await;
-                let client = aws_sdk_s3::Client::new(&config);
-                let flags = FileFlags::from(libc::O_RDWR);
-                let _ = s3uri;
-                let mut runtime_config = HyperFileRuntimeConfig::default_large();
-                // disable hyper file internal max flush interval threshold
-                runtime_config.data_cache_dirty_max_flush_interval = u64::MAX;
-                let hyper = Hyper::fs_open_opt(&client, dev_path, flags, &runtime_config).await.expect("failed to open hyper file");
-                let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
-                (hyper, stat)
+            let spawner = LocalSpawner::new_current();
+            let (hyper, stat) = smol::block_on(async {
+                rt.block_on(async {
+                    let config = aws_config::load_from_env().await;
+                    let client = aws_sdk_s3::Client::new(&config);
+                    let flags = FileFlags::from(libc::O_RDWR);
+                    let _ = s3uri;
+                    let mut runtime_config = HyperFileRuntimeConfig::default_large();
+                    // disable hyper file internal max flush interval threshold
+                    runtime_config.data_cache_dirty_max_flush_interval = u64::MAX;
+                    let hyper = Hyper::fs_open_opt(&client, dev_path, flags, &runtime_config).await.expect("failed to open hyper file");
+                    let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
+                    (hyper, stat)
+                })
             });
             let (tx, rx) = oneshot::channel();
             spawner.spawn(hyper, tx);
-            let fh = rt.block_on(async {
-                rx.await.expect("failed to get back file handler")
+            let fh = smol::block_on(async {
+                rt.block_on(async {
+                    rx.await.expect("failed to get back file handler")
+                })
             });
             return Self {
                 device_path: dev_path.to_string(),
@@ -90,9 +94,14 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
         let b = unsafe { std::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, buf.len()) };
         let (ctx, tx, mut rx) = FileContext::new_read(b, offset as usize);
+        let rt = self.rt.clone();
         self.state.set_read();
         self.handler.send(ctx);
-        let res = rx.recv().await.expect("task channel closed");
+        let res = smol::unblock(move || {
+            rt.block_on(async {
+                rx.recv().await.expect("task channel closed")
+            })
+        }).await;
         self.state.clear_read();
         drop(tx);
         res
@@ -107,9 +116,14 @@ impl<'a: 'static> Replica for S3Replica<'a> {
         }
         let b = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len()) };
         let (ctx, tx, mut rx) = FileContext::new_write(b, offset as usize, self.handler.clone());
+        let rt = self.rt.clone();
         self.state.set_write();
         self.handler.send(ctx);
-        let res = rx.recv().await.expect("task channel closed");
+        let res = smol::unblock(move || {
+            rt.block_on(async {
+                rx.recv().await.expect("task channel closed")
+            })
+        }).await;
         self.state.clear_write();
         drop(tx);
         res
@@ -117,9 +131,14 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn write_zero(&self, offset: u64, len: u64) -> Result<usize> {
         let (ctx, tx, mut rx) = FileContext::new_write_zero(offset as usize, len as usize, self.handler.clone());
+        let rt = self.rt.clone();
         self.state.set_write();
         self.handler.send(ctx);
-        let res = rx.recv().await.expect("task channel closed");
+        let res = smol::unblock(move || {
+            rt.block_on(async {
+                rx.recv().await.expect("task channel closed")
+            })
+        }).await;
         self.state.clear_write();
         drop(tx);
         res
@@ -127,17 +146,27 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn flush(&self) -> Result<u64> {
         let (ctx, rx) = FileContext::new_flush();
+        let rt = self.rt.clone();
         self.state.set_flush();
         self.handler.send(ctx);
-        let res = rx.await.expect("task channel closed");
+        let res = smol::unblock(move || {
+            rt.block_on(async {
+                rx.await.expect("task channel closed")
+            })
+        }).await;
         self.state.clear_flush();
         res
     }
 
     async fn close(&self) -> Result<u64> {
         let (ctx, rx) = FileContext::new_release();
+        let rt = self.rt.clone();
         self.handler.send(ctx);
-        let res = rx.await.expect("task channel closed");
+        let res = smol::unblock(move || {
+            rt.block_on(async {
+                rx.await.expect("task channel closed")
+            })
+        }).await;
         self.state.set_closed();
         res
     }
@@ -166,8 +195,14 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn last_cno(&self) -> u64 {
         let (ctx, rx) = FileContext::new_last_cno();
+        let rt = self.rt.clone();
         self.handler.send(ctx);
-        rx.await.expect("task channel closed")
+        let res = smol::unblock(move || {
+            rt.block_on(async {
+                rx.await.expect("task channel closed")
+            })
+        }).await;
+        res
     }
 
     fn is_active(&self) -> bool {
