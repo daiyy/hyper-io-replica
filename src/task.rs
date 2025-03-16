@@ -16,6 +16,7 @@ use crate::replica::Replica;
 use crate::pool::TgtPendingBlocksPool;
 use crate::device::MetaDevice;
 
+// high 32 bits for busy | low 32 bits for start
 #[repr(u64)]
 pub(crate) enum TaskId {
     Pool = 0b0000_0001,
@@ -69,6 +70,26 @@ impl TaskState {
             }
         }
     }
+
+    pub(crate) fn set_busy(&self, id: TaskId) {
+        let _ = self.inner.fetch_or((id as u64) << 32, Ordering::SeqCst);
+    }
+
+    pub(crate) fn clear_busy(&self, id: TaskId) {
+        let _ = self.inner.fetch_and(!((id as u64) << 32), Ordering::SeqCst);
+    }
+
+    pub(crate) async fn wait_on_all_tasks_idle(&self) {
+        loop {
+            let state = self.inner.load(Ordering::SeqCst);
+            if (state >> 32) == 0 {
+                // if all tasks are not in busy
+                break;
+            } else {
+                smol::Timer::after(Duration::from_millis(10)).await;
+            }
+        }
+    }
 }
 
 pub struct TaskManager<T> {
@@ -104,6 +125,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         loop {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
             if pool.borrow().is_replica_busy() { continue; }
+            task_state.set_busy(TaskId::PeriodicReplicaFlush);
             let now = SystemTime::now();
             let cno = replica_device.flush().await.expect("replica deivce flush failed");
             debug!("TgtPendingBlocksPool periodic task replica flush - done with segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
@@ -113,6 +135,7 @@ impl<T: Replica + 'static> TaskManager<T> {
                 last_primary_metadata_cno = cno;
                 last_replica_ondisk_cno = cno;
             }
+            task_state.clear_busy(TaskId::PeriodicReplicaFlush);
         }
     }
 
@@ -181,7 +204,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         Ok(())
     }
 
-    async fn inner_stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, _region: Rc<Region>, _recover: Rc<RecoverCtrl>) -> Result<(), UblkError> {
+    async fn inner_stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, _region: Rc<Region>, _recover: Rc<RecoverCtrl>, task_state: TaskState) -> Result<(), UblkError> {
         let dev_id = pool.borrow().dev_id;
 
         // stop ublk dev in a blocking thread
@@ -210,6 +233,8 @@ impl<T: Replica + 'static> TaskManager<T> {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
         }
 
+        task_state.wait_on_all_tasks_idle().await;
+
         let replica = pool.borrow().replica_device.dup().await;
         while replica.is_active() {
             smol::Timer::after(std::time::Duration::from_secs(5)).await;
@@ -225,9 +250,9 @@ impl<T: Replica + 'static> TaskManager<T> {
         std::process::exit(0);
     }
 
-    pub(crate) async fn stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>) {
+    pub(crate) async fn stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>, task_state: TaskState) {
         loop {
-            match Self::inner_stop(pool.clone(), state.clone(), region.clone(), recover.clone()).await {
+            match Self::inner_stop(pool.clone(), state.clone(), region.clone(), recover.clone(), task_state.clone()).await {
                 Ok(_) => { break; },
                 Err(UblkError::UringIoQueued) => {
                     smol::Timer::after(std::time::Duration::from_secs(5)).await;

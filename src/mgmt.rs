@@ -48,7 +48,7 @@ impl<T> Global<T> {
 }
 
 impl Command {
-    pub async fn execute<T: Replica + 'static>(self, global: Global<T>) -> Option<String> {
+    pub async fn execute<T: Replica + 'static>(self, global: Global<T>, task_state: TaskState) -> Option<String> {
         let state = global.state.clone();
         let recover = global.recover.clone();
         let region = global.region.clone();
@@ -87,7 +87,7 @@ impl Command {
                                 },
                                 255 => {
                                     let pool = global.pool.clone();
-                                    TaskManager::stop(pool, state, region, recover).await;
+                                    TaskManager::stop(pool, state, region, recover, task_state).await;
                                     format!("Target stopped")
                                 },
                                 v @ _ => {
@@ -162,15 +162,16 @@ impl CommandChannel {
         while let Some(stream) = incoming.next().await {
             let stream = stream.expect("failed to get unix stream");
             let c_global = global.clone();
+            let c_task_state = task_state.clone();
             let task = exec.spawn(async move {
-                Self::cmd_handler(stream, c_global).await;
+                Self::cmd_handler(stream, c_global, c_task_state).await;
             });
             task.detach();
         }
     }
 
     // handle command stream in loop until EOF received
-    pub async fn cmd_handler<T: Replica + 'static>(mut stream: UnixStream, global: Global<T>) {
+    pub async fn cmd_handler<T: Replica + 'static>(mut stream: UnixStream, global: Global<T>, task_state: TaskState) {
         loop {
             let mut reader = BufReader::new(stream.clone());
             let mut buf_in = Vec::new();
@@ -182,7 +183,7 @@ impl CommandChannel {
                 return;
             }
             let cmd: Command = serde_json::from_slice(&buf_in).expect("unable to deser Command bytes");
-            match cmd.execute(global.clone()).await {
+            match cmd.execute(global.clone(), task_state.clone()).await {
                 Some(resp) => {
                     let _ = stream.write_all(resp.as_bytes()).await;
                     let _ = stream.write(b"\0").await;

@@ -598,9 +598,11 @@ impl RecoverCtrl {
         task_state.set_start(TaskId::Recover);
         // keep waiting on next cmd from channel
         while let Ok(cmd) = self.rx.recv().await {
+            task_state.set_busy(TaskId::Recover);
             if cmd {
                 self.do_recovery(replica.dup().await, exec.clone()).await;
             }
+            task_state.clear_busy(TaskId::Recover);
         }
     }
 
