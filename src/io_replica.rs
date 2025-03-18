@@ -697,6 +697,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     // check region size with checked one
     assert!(lo.region_size == g_region.region_size());
 
+    // load and fill in-memory region tracker with persist region
+    let v_dirty_regions = meta_dev.preg_load();
+    for region_id in v_dirty_regions.into_iter() {
+        g_region.mark_dirty_region_id(region_id);
+    }
+
     let g_recover_ctrl = recover::RecoverCtrl::default()
         .with_region_size(g_region.region_size())
         .with_nr_regions(g_region.nr_regions())
@@ -726,12 +732,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     // create a task state tracker
     let task_state = TaskState::new();
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
-        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev_desc, dev_id, g_seq.clone());
+        let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev, dev_id, g_seq.clone());
         let _tx = tgt.get_tx_chan();
         let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
     } else {
-        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev_desc, dev_id, g_seq.clone());
+        let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev, dev_id, g_seq.clone());
         let _tx = tgt.get_tx_chan();
         let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)

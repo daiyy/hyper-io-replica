@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Result;
 use std::time::SystemTime;
 use log::info;
 use smol::fs::{File, OpenOptions, unix::OpenOptionsExt};
@@ -6,6 +7,7 @@ use smol::io::{AsyncWriteExt, AsyncReadExt, AsyncSeekExt, SeekFrom};
 use block_utils::Device;
 use crate::metadata::{SuperBlock, FlushLog};
 use crate::ondisk::{SuperBlockRaw, FlushLogBlockRaw};
+use crate::region::PersistRegionMap;
 
 const MIN_TARGET_DEVICE_REGIONS: u64 = 2;
 const MIN_META_BLOCK_SIZE: u64 = 32_768;
@@ -13,7 +15,6 @@ const MIN_META_BLOCK_SIZE: u64 = 32_768;
 #[derive(Clone, Debug)]
 pub struct PrimaryDevice {
     pub device_path: String,
-    #[allow(dead_code)]
     pub region_size: u64,
     pub tgt_device_size: u64,
     pub reserved_size: u64,
@@ -78,8 +79,10 @@ impl PrimaryDevice {
 #[derive(Clone)]
 pub struct MetaDeviceDesc {
     pub device_path: String,
-    pub offset: u64,
+    pub offset: u64, // start of meta area, used for flush log
     pub size: u64,
+    pub region_map_offset: u64, // offset for dirty region map
+    pub region_map_size: u64, // size of dirty region map aligned to 4K block
     pub sb_offset: u64,
 }
 
@@ -92,10 +95,15 @@ impl fmt::Display for MetaDeviceDesc {
 
 impl MetaDeviceDesc {
     pub fn from_primary_device(pri: &PrimaryDevice) -> Self {
+        let nr_regions = pri.tgt_device_size / pri.region_size;
+        let region_map_size = (nr_regions + 64 - 1) / 64;
+        let aligned_region_map_size = (region_map_size + 4096 - 1) / 4096;
         Self {
             device_path: pri.device_path.clone(),
             offset: pri.tgt_device_size,
             size: pri.reserved_size,
+            region_map_offset: pri.tgt_device_size + 4096,
+            region_map_size: aligned_region_map_size,
             // align sb offset to last sector
             sb_offset: (pri.tgt_raw_size - 512) >> 9 << 9,
         }
@@ -107,6 +115,7 @@ pub struct MetaDevice {
     pub file: File,
     pub flush_log: FlushLog,
     pub sb: SuperBlock,
+    pub preg: PersistRegionMap,
 }
 
 impl MetaDevice {
@@ -132,11 +141,14 @@ impl MetaDevice {
         let mut fl_raw = FlushLogBlockRaw::default();
         let _ = file.read_exact(fl_raw.as_mut_u8_slice()).await;
 
+        let preg = PersistRegionMap::open(&dev_path, desc.region_map_offset, desc.region_map_size).await.expect("failed to open persist region map on meta area");
+
         Self {
             desc: desc.to_owned(),
             file: file,
             flush_log: FlushLog::from(&fl_raw),
             sb: SuperBlock::from(&sb_raw),
+            preg: preg,
         }
     }
 
@@ -206,5 +218,18 @@ impl MetaDevice {
         self.sb.raw.shutdown_timestamp = now;
         let _ = self.file.seek(SeekFrom::Start(self.desc.sb_offset)).await;
         let _ = self.file.write_all(self.sb.raw.as_u8_slice()).await;
+    }
+
+    pub fn preg_load(&self) -> Vec<u64> {
+        self.preg.load()
+    }
+
+    #[allow(dead_code)]
+    pub async fn preg_mark_dirty(&self, region_id: u64) -> Result<()> {
+        self.preg.mark_dirty(region_id).await
+    }
+
+    pub async fn preg_mark_dirty_batch(&self, regions: Vec<u64>) -> Result<()> {
+        self.preg.mark_dirty_batch(regions).await
     }
 }

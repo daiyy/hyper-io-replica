@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Result;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::collections::HashSet;
@@ -209,6 +210,131 @@ pub(crate) fn local_region_map_sync(dirty_region_ids: Vec<u64>) {
 #[inline]
 pub(crate) fn local_region_shift() -> u32 {
     LOCAL_REGION_SHIFT.with(|v| { *(v.borrow()) })
+}
+
+pub struct PersistRegionMap {
+    offset: u64,
+    size: u64,
+    ptr_value: u64, // value of raw ptr
+}
+
+impl fmt::Debug for PersistRegionMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PersistRegionMap {{ offset: {}, size: {}, ptr: {:p}}}",
+            self.offset, self.size, self.ptr_value as *const u8)
+    }
+}
+
+impl PersistRegionMap {
+    #[inline]
+    fn ptr(ptr_value: u64) -> *mut libc::c_void {
+        ptr_value as *mut libc::c_void
+    }
+
+    pub(crate) async fn open(dev_path: &str, offset: u64, size: u64) -> Result<Self> {
+
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let path = dev_path.to_string();
+        let file = smol::unblock(move || {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(&path)
+        }).await?;
+        let fd = file.as_raw_fd();
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut::<libc::c_void>(),
+                size as libc::size_t,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED | libc::MAP_POPULATE,
+                fd,
+                offset as libc::off_t,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            offset,
+            size,
+            ptr_value: ptr as u64,
+        })
+    }
+
+    pub(crate) async fn close(&self) -> Result<()> {
+        self.sync().await?;
+        let ret = unsafe {
+            libc::munmap(Self::ptr(self.ptr_value), self.size as libc::size_t)
+        };
+        if ret == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    async fn sync(&self) -> Result<()> {
+        let size = self.size as libc::size_t;
+        let ptr_value = self.ptr_value;
+        let ret = smol::unblock(move || {
+            unsafe {
+                libc::msync(Self::ptr(ptr_value), size, libc::MS_SYNC)
+            }
+        }).await;
+        if ret == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    // load persist region map from disk, return vec of dirty region id
+    pub(crate) fn load(&self) -> Vec<u64> {
+        let mut v = Vec::new();
+        let slots = self.size / 8;
+        let ptr = Self::ptr(self.ptr_value) as *mut u64;
+        for i in 0..slots {
+            let bits = unsafe { *ptr.add(i as usize) };
+            if bits == 0 { continue; }
+            for shift in 0..64 {
+                let mask: u64 = 1 << shift;
+                if bits & mask == 0 { continue; }
+                let region_id = i as u64 * 64 + shift;
+                v.push(region_id);
+            }
+        }
+        v
+    }
+
+    fn mark_dirty_one(&self, region_id: u64) {
+        assert!(region_id < self.size * 8); // assume region id not exceed persist map space
+        let grp_idx = region_id / 64;
+        let bit_idx = region_id % 64;
+
+        let ptr = Self::ptr(self.ptr_value) as *mut u64;
+        unsafe {
+            let ptr = ptr.add(grp_idx as usize);
+            let v = *ptr | 1 << bit_idx;
+            *ptr = v;
+        }
+    }
+
+    // mark dirty by region id
+    #[allow(dead_code)]
+    pub(crate) async fn mark_dirty(&self, region_id: u64) -> Result<()> {
+        self.mark_dirty_one(region_id);
+        self.sync().await
+    }
+
+    // mark dirty batch by vec region id
+    pub(crate) async fn mark_dirty_batch(&self, regions: Vec<u64>) -> Result<()> {
+        for region_id in regions.into_iter() {
+            self.mark_dirty_one(region_id)
+        }
+        self.sync().await
+    }
 }
 
 #[cfg(test)]

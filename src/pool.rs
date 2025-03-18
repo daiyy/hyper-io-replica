@@ -5,12 +5,12 @@ use std::collections::{HashMap, BTreeMap};
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
-use log::{info, debug, trace};
+use log::{error, info, debug, trace};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
 use crate::recover::RecoverCtrl;
 use crate::replica::Replica;
-use crate::device::MetaDeviceDesc;
+use crate::device::MetaDevice;
 use crate::task::{TaskState, TaskId};
 use crate::seq::IncrSeq;
 use crate::stats::PoolStats;
@@ -183,14 +183,14 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     pub(crate) pending_bytes: usize,
     pub(crate) inflight_bytes: usize, // track inflight bytes logging to replica
     pub(crate) max_capacity: usize,
-    pub(crate) meta_dev_desc: MetaDeviceDesc,
+    pub(crate) meta_dev: MetaDevice,
     pub(crate) dev_id: u32,
     pub(crate) g_seq: IncrSeq,
     pub(crate) l_seq: u64,
 }
 
 impl<T> TgtPendingBlocksPool<T> {
-    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev_desc: MetaDeviceDesc, dev_id: u32, g_seq: IncrSeq) -> Self
+    pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev: MetaDevice, dev_id: u32, g_seq: IncrSeq) -> Self
         where T: Replica + 'static
     {
         let (tx, rx) = channel::unbounded();
@@ -207,7 +207,7 @@ impl<T> TgtPendingBlocksPool<T> {
             max_capacity: max_capacity,
             replica_path: replica_path.to_string(),
             replica_device: replica_device,
-            meta_dev_desc,
+            meta_dev,
             dev_id,
             g_seq,
             l_seq: 1,
@@ -236,7 +236,11 @@ impl<T> TgtPendingBlocksPool<T> {
     }
 
     // to handler all cases that pending io should log as dirty region
-    pub(crate) fn log_as_dirty_region(pool: Rc<RefCell<Self>>, region: Rc<Region>, state: Rc<GlobalTgtState>, inflight_dirty_regions: Vec<u64>) {
+    // as result
+    // all pending ios in staging_data_queue/staging_seq_queue/pending_queue marked as dirty reion
+    // return:
+    //   - list of all dirty region should be log
+    pub(crate) fn log_as_dirty_region_in_memory(pool: Rc<RefCell<Self>>, region: Rc<Region>, state: Rc<GlobalTgtState>, inflight_dirty_regions: Vec<u64>) -> Vec<u64> {
         assert!(!state.is_logging_enabled());
         let mut ids = inflight_dirty_regions;
         for io in pool.borrow().staging_data_queue.iter() {
@@ -256,10 +260,16 @@ impl<T> TgtPendingBlocksPool<T> {
         ids.dedup();
 
         // mark all pending io covered region dirty
-        for region_id in ids.into_iter() {
-            region.mark_dirty_region_id(region_id);
+        for region_id in ids.iter() {
+            region.mark_dirty_region_id(*region_id);
         }
+        return ids;
+    }
 
+    fn pool_clear_all_pending(pool: Rc<RefCell<Self>>) {
+        assert!(pool.borrow().staging_data_queue.len() == 0);
+        assert!(pool.borrow().staging_seq_queue.len() == 0);
+        assert!(pool.borrow().pending_queue.len() == 0);
         // cleanup queue in pool
         pool.borrow_mut().inflight_bytes = 0;
         pool.borrow_mut().staging_data_queue.clear();
@@ -296,7 +306,13 @@ impl<T> TgtPendingBlocksPool<T> {
         let start = std::time::Instant::now();
         let Ok(segid) = replica_device.log_pending_io(pending, false).await else {
             state.set_logging_disable();
-            Self::log_as_dirty_region(pool.clone(), region, state, inflight_dirty_regions);
+            let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region, state, inflight_dirty_regions);
+            let res = pool.borrow().meta_dev.preg_mark_dirty_batch(dirty_regions).await;
+            if res.is_err() {
+                error!("TgtPendingBlocksPool - failed to sync persist region map {:?}", res);
+                // TODO: handle meta device failed case
+            }
+            Self::pool_clear_all_pending(pool.clone());
             return false;
         };
         assert!(segid == 0);
@@ -417,7 +433,13 @@ impl<T> TgtPendingBlocksPool<T> {
 
             // logging disabled, log dirty region instead
             if !state.is_logging_enabled() {
-                Self::log_as_dirty_region(pool.clone(), region.clone(), state.clone(), Vec::new());
+                let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region.clone(), state.clone(), Vec::new());
+                let res = pool.borrow().meta_dev.preg_mark_dirty_batch(dirty_regions).await;
+                if res.is_err() {
+                    error!("TgtPendingBlocksPool - failed to sync persist region map {:?}", res);
+                    // TODO: handle meta device failed case
+                }
+                Self::pool_clear_all_pending(pool.clone());
                 continue;
             }
 
@@ -427,7 +449,13 @@ impl<T> TgtPendingBlocksPool<T> {
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
 
                 state.set_logging_disable();
-                Self::log_as_dirty_region(pool.clone(), region.clone(), state.clone(), Vec::new());
+                let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region.clone(), state.clone(), Vec::new());
+                let res = pool.borrow().meta_dev.preg_mark_dirty_batch(dirty_regions).await;
+                if res.is_err() {
+                    error!("TgtPendingBlocksPool - failed to sync persist region map {:?}", res);
+                    // TODO: handle meta device failed case
+                }
+                Self::pool_clear_all_pending(pool.clone());
                 continue;
             }
 
