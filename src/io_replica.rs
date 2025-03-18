@@ -790,7 +790,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
             new_q_fn(qid, dev, g_seq)
         },
-        move |ctrl: &UblkCtrl| crate::rublk_prep_dump_dev(_shm, fg, ctrl),
+        move |ctrl: &UblkCtrl| crate::utils::rublk_prep_dump_dev(_shm, fg, ctrl),
     )
     .unwrap();
 

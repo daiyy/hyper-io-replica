@@ -121,7 +121,7 @@ pub(crate) fn ublk_add_null(ctrl: UblkCtrl, opt: Option<NullAddArgs>) -> Result<
         }
     };
     ctrl.run_target(tgt_init, q_handler, move |dev: &UblkCtrl| {
-        crate::rublk_prep_dump_dev(_shm, fg, dev);
+        crate::utils::rublk_prep_dump_dev(_shm, fg, dev);
     })
     .unwrap();
 

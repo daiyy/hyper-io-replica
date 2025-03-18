@@ -4,13 +4,33 @@ use std::path::PathBuf;
 use clap::Parser;
 use bytesize::ByteSize;
 
+pub(crate) mod target_flags {
+    pub const TGT_QUIET: u64 = 0b00000001;
+}
+
 #[macro_use]
 extern crate nix;
 
-mod utils;
+mod args;
+mod r#loop;
+mod null;
+mod zoned;
+mod io_replica;
+mod pool;
+mod state;
+mod region;
+mod recover;
+mod mgmt;
 mod device;
-mod metadata;
+mod replica;
+mod stats;
+mod utils;
 mod ondisk;
+mod metadata;
+mod mgmt_proto;
+mod mgmt_client;
+mod task;
+mod seq;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

@@ -299,7 +299,7 @@ pub(crate) fn ublk_add_loop(ctrl: UblkCtrl, opt: Option<LoopArgs>) -> Result<i32
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
         move |qid, dev: &_| if aa { q_a_fn(qid, dev) } else { q_fn(qid, dev) },
-        move |ctrl: &UblkCtrl| crate::rublk_prep_dump_dev(_shm, fg, ctrl),
+        move |ctrl: &UblkCtrl| crate::utils::rublk_prep_dump_dev(_shm, fg, ctrl),
     )
     .unwrap();
     Ok(0)

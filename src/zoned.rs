@@ -719,7 +719,7 @@ pub(crate) fn ublk_add_zoned(ctrl: UblkCtrl, opt: Option<ZonedAddArgs>) -> Resul
     };
 
     ctrl.run_target(tgt_init, q_handler, move |ctrl: &_| {
-        crate::rublk_prep_dump_dev(_shm, fg, ctrl)
+        crate::utils::rublk_prep_dump_dev(_shm, fg, ctrl)
     })
     .unwrap();
 
