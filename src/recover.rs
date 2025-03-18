@@ -1,5 +1,6 @@
 use std::fmt;
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::collections::{HashMap, VecDeque};
@@ -18,6 +19,7 @@ use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
 use crate::replica::Replica;
 use crate::task::{TaskState, TaskId};
+use crate::pool::TgtPendingBlocksPool;
 
 const RECOVERY_WAIT_ON_MS: u64 = 50;
 const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
@@ -455,7 +457,8 @@ impl RecoverCtrl {
     }
 
     // main control of recover process
-    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, replica: T, exec: Rc<LocalExecutor<'a>>) {
+    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'a>>) {
+        let replica = pool.borrow().replica_device.dup().await;
         // prepare recover mode
         let mode = self.mode.read_arc().await;
         let forward = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
@@ -506,6 +509,7 @@ impl RecoverCtrl {
         // all regions recovered, clear recover state bits
         let mut mode_lock = self.mode.write_arc().await;
         let state = self.g_state.clear_all_recover_bits();
+        let _ = pool.borrow().meta_dev.preg_clear_all().await;
         *mode_lock = state;
     }
 
@@ -593,14 +597,14 @@ impl RecoverCtrl {
         v
     }
 
-    pub(crate) async fn main_loop<'a, 'b, T: Replica + 'a + 'b>(&self, replica: T, exec: Rc<LocalExecutor<'b>>, task_state: TaskState) {
+    pub(crate) async fn main_loop<'a, 'b, T: Replica + 'a + 'b>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'b>>, task_state: TaskState) {
         task_state.wait_on_tgt_pool_start().await;
         task_state.set_start(TaskId::Recover);
         // keep waiting on next cmd from channel
         while let Ok(cmd) = self.rx.recv().await {
             task_state.set_busy(TaskId::Recover);
             if cmd {
-                self.do_recovery(replica.dup().await, exec.clone()).await;
+                self.do_recovery(pool.clone(), exec.clone()).await;
             }
             task_state.clear_busy(TaskId::Recover);
         }
