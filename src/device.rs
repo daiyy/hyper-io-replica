@@ -232,4 +232,8 @@ impl MetaDevice {
     pub async fn preg_mark_dirty_batch(&self, regions: Vec<u64>) -> Result<()> {
         self.preg.mark_dirty_batch(regions).await
     }
+
+    pub async fn preg_clear_all(&self) -> Result<()> {
+        self.preg.clear_all().await
+    }
 }

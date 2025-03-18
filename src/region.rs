@@ -335,6 +335,16 @@ impl PersistRegionMap {
         }
         self.sync().await
     }
+
+    pub(crate) async fn clear_all(&self) -> Result<()> {
+        let slots = self.size / 8;
+        let ptr = Self::ptr(self.ptr_value) as *mut u64;
+        for i in 0..slots {
+            let p_bits = unsafe { ptr.add(i as usize) };
+            unsafe { *p_bits = 0; }
+        }
+        self.sync().await
+    }
 }
 
 #[cfg(test)]
