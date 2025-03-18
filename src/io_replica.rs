@@ -699,6 +699,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     // load and fill in-memory region tracker with persist region
     let v_dirty_regions = meta_dev.preg_load();
+    if v_dirty_regions.len() > 0 {
+        warn!("loading persist region from meta device {:?}", v_dirty_regions);
+    }
     for region_id in v_dirty_regions.into_iter() {
         g_region.mark_dirty_region_id(region_id);
     }
