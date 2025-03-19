@@ -96,8 +96,8 @@ pub trait Replica: Sized + Send {
     fn dup(&self) -> impl std::future::Future<Output = Self>;
     fn open(&self);
     fn size(&self) -> u64;
-    fn read(&self, offset: u64, buf: &mut [u8]) -> impl Future<Output = Result<usize>>;
-    fn write(&self, offset: u64, buf: &[u8]) -> impl Future<Output = Result<usize>>;
+    fn read(&self, offset: u64, buf: &mut [u8]) -> impl Future<Output = Result<usize>> + Send;
+    fn write(&self, offset: u64, buf: &[u8]) -> impl Future<Output = Result<usize>> + Send;
     fn write_zero(&self, offset: u64, len: u64) -> impl Future<Output = Result<usize>>;
     fn flush(&self) -> impl Future<Output = Result<u64>>;
     fn close(&self) -> impl Future<Output = Result<u64>>;

@@ -183,11 +183,10 @@ impl<T: Replica + 'static> TaskManager<T> {
             let rc_exec = Rc::new(exec);
 
             let c_recover = rc_recover.clone();
-            let c_exec = rc_exec.clone();
             let c_pool = rc_pool.clone();
             let c_task_state = task_state.clone();
             f_vec.push(rc_exec.spawn(async move {
-                c_recover.main_loop(c_pool, c_exec, c_task_state).await;
+                c_recover.main_loop(c_pool, c_task_state).await;
             }));
 
             let cmd_chan = CommandChannel::new(unix_sock.as_path());

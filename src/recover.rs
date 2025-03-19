@@ -1,13 +1,13 @@
 use std::fmt;
+use std::io::Result;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::collections::{HashMap, VecDeque};
 use smol::channel;
-use smol::io::Result;
 use smol::lock::{Mutex, RwLock};
-use smol::LocalExecutor;
+use smol::Executor;
 use smol::lock::Semaphore;
 use smol::fs::{OpenOptions, unix::OpenOptionsExt};
 use smol::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
@@ -457,7 +457,7 @@ impl RecoverCtrl {
     }
 
     // main control of recover process
-    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'a>>) {
+    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Executor<'a>) {
         let replica = pool.borrow().replica_device.dup().await;
         // prepare recover mode
         let mode = self.mode.read_arc().await;
@@ -486,8 +486,7 @@ impl RecoverCtrl {
                 let c_replica = replica.dup().await;
                 let c_inflight = self.inflight.clone();
                 let c_pending = self.pending.clone();
-                let c_exec = exec.clone();
-                let task = c_exec.spawn(async move {
+                let task = exec.spawn(async move {
                     let _ = Self::recover_worker(c_inflight, c_pending,
                         c_primary, c_replica, forward,
                         region_id, region_size, region).await;
@@ -514,7 +513,7 @@ impl RecoverCtrl {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn _do_recovery(&self, _exec: Rc<LocalExecutor<'_>>) {
+    pub(crate) async fn _do_recovery(&self, _exec: Rc<smol::LocalExecutor<'_>>) {
         while let Some((region_id, region)) = self.fetch_one().await {
             let mut lock = region.lock().await;
             (*lock).state = RecoverState::Recovering;
@@ -597,14 +596,16 @@ impl RecoverCtrl {
         v
     }
 
-    pub(crate) async fn main_loop<'a, 'b, T: Replica + 'a + 'b>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Rc<LocalExecutor<'b>>, task_state: TaskState) {
+    pub(crate) async fn main_loop<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, task_state: TaskState) {
         task_state.wait_on_tgt_pool_start().await;
         task_state.set_start(TaskId::Recover);
         // keep waiting on next cmd from channel
         while let Ok(cmd) = self.rx.recv().await {
+            // dedicate executor for recover workder
+            let exec = smol::Executor::new();
             task_state.set_busy(TaskId::Recover);
             if cmd {
-                self.do_recovery(pool.clone(), exec.clone()).await;
+                self.do_recovery(pool.clone(), exec).await;
             }
             task_state.clear_busy(TaskId::Recover);
         }
