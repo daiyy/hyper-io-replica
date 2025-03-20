@@ -172,7 +172,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
-        let mut bytes = 0;
+        let mut _bytes = 0;
         self.state.set_logging();
         for io in pending.into_iter() {
             if io.size() == 0 {
@@ -181,7 +181,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             }
             let offset = io.offset();
             let buf = io.as_ref();
-            bytes += io.data_size();
+            _bytes += io.data_size();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
         let segid = if flush {
