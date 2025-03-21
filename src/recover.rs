@@ -35,6 +35,16 @@ pub(crate) enum RecoverState {
 
 pub(crate) struct Region {
     pub(crate) state: RecoverState,
+    buf: *mut u8, // buffer ptr for region in memory data mirror
+    size: usize,  // size of region
+}
+
+unsafe impl Send for Region {}
+
+impl Region {
+    fn new(state: RecoverState) -> Self {
+        Self { state: state, buf: std::ptr::null_mut(), size: 0 }
+    }
 }
 
 #[derive(Clone)]
@@ -165,7 +175,7 @@ impl RecoverCtrl {
     pub(crate) fn new(region_size: u64, nr_regions: u64, mode: u64, primary: &str, replica: &str) -> Self {
         let mut map = HashMap::new();
         for i in 0..nr_regions {
-            map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::NoSync })));
+            map.insert(i, Arc::new(Mutex::new(Region::new(RecoverState::NoSync))));
         }
 
         // sort by key
@@ -197,7 +207,7 @@ impl RecoverCtrl {
     fn init_no_sync(nr_regions: u64) -> (HashMap<u64, Arc<Mutex<Region>>>, VecDeque<(u64, Arc<Mutex<Region>>)>) {
         let mut map = HashMap::new();
         for i in 0..nr_regions {
-            map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::NoSync })));
+            map.insert(i, Arc::new(Mutex::new(Region::new(RecoverState::NoSync))));
         }
 
         // sort by key
@@ -263,12 +273,12 @@ impl RecoverCtrl {
         let mut map = HashMap::new();
         let nr_regions = g_region.nr_regions();
         for i in 0..nr_regions {
-            map.insert(i, Arc::new(Mutex::new(Region { state: RecoverState::Clean })));
+            map.insert(i, Arc::new(Mutex::new(Region::new(RecoverState::Clean))));
         }
         // update NoSync region
         let mut nosync = Vec::new();
         for i in v.iter() {
-            let region = Arc::new(Mutex::new(Region { state: RecoverState::NoSync }));
+            let region = Arc::new(Mutex::new(Region::new(RecoverState::NoSync)));
             map.insert(*i, region.clone());
             nosync.push((*i, region));
         }
