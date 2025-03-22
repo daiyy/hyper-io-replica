@@ -19,7 +19,7 @@ use crate::region;
 use crate::io_replica::LOCAL_RECOVER_CTRL;
 use crate::replica::Replica;
 use crate::task::{TaskState, TaskId};
-use crate::pool::TgtPendingBlocksPool;
+use crate::pool::{TgtPendingBlocksPool, PendingIo};
 
 const RECOVERY_WAIT_ON_MS: u64 = 50;
 const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
@@ -33,9 +33,11 @@ pub(crate) enum RecoverState {
     Dirty       = 3, // new write after synced
 }
 
+const MIN_ALIGNED: usize = 4096;
+
 pub(crate) struct Region {
     pub(crate) state: RecoverState,
-    buf: *mut u8, // buffer ptr for region in memory data mirror
+    ptr: *mut u8, // buffer ptr for region in memory data mirror
     size: usize,  // size of region
 }
 
@@ -43,7 +45,48 @@ unsafe impl Send for Region {}
 
 impl Region {
     fn new(state: RecoverState) -> Self {
-        Self { state: state, buf: std::ptr::null_mut(), size: 0 }
+        Self { state: state, ptr: std::ptr::null_mut(), size: 0 }
+    }
+
+    fn alloc(&mut self, size: usize) {
+        let layout = std::alloc::Layout::from_size_align(size, MIN_ALIGNED).expect("unable to create layout for aligned block");
+        self.ptr = unsafe { std::alloc::alloc(layout) };
+        self.size = size;
+    }
+
+    // load region from primary device
+    async fn load_from_primary(&mut self, primary: &str, region_size: u64, region_id: u64) -> Result<()> {
+        assert!(!self.ptr.is_null());
+        assert!(self.size == region_size as usize);
+        let mut primary_dev = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(primary)
+                .await.expect("unable to open primary device");
+
+        let offset = region_size * region_id;
+        let buf = unsafe {
+            std::slice::from_raw_parts_mut(self.ptr, self.size)
+        };
+        primary_dev.seek(smol::io::SeekFrom::Start(offset)).await?;
+        primary_dev.read_exact(buf).await?;
+        Ok(())
+    }
+
+    // write pending io into region buffer
+    fn write(&self, io: PendingIo, region_size: u64, region_id: u64) {
+        let p_offset = io.offset();
+        let p_size = io.data_size();
+        // check region id is correct
+        assert!(region_id == p_offset / region_size);
+        // check data size is not exceed region boundary
+        assert!(region_id == (p_offset + p_size as u64) / region_size);
+        let offset = (p_offset % region_size) as usize;
+        let buf: &mut [u8] = unsafe {
+            std::slice::from_raw_parts_mut(self.ptr, self.size)
+        };
+        let mut chunk = &mut buf[offset..offset+p_size];
+        chunk.copy_from_slice(io.as_ref());
     }
 }
 
