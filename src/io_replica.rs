@@ -140,6 +140,11 @@ std::thread_local! {
     pub(crate) static LOCAL_REGION_SHIFT: RefCell<u32> = panic!("local region shift value is not yet init");
 }
 
+#[cfg(feature="piopr")]
+std::thread_local! {
+    pub(crate) static LOCAL_PIO_PREGION: Arc<region::PendingIoPersistRegionMap> = panic!("local pending io persist region is not yet init");
+}
+
 #[inline]
 fn pool_append_pending(iod: &ublksrv_io_desc, seq: u64, force_propgate: bool) {
     PENDING_BLOCKS.with(|pool| {
@@ -262,6 +267,10 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
                 libublk::sys::UBLK_IO_OP_DISCARD |
                 libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
                     if state::local_state_logging_enabled() {
+                        #[cfg(feature="piopr")]
+                        if region::local_piopr_persist_pending(&iod).is_err() {
+                            return -libc::EIO;
+                        }
                         pool_append_pending(&iod, seq.next(iod.op_flags), false);
                     } else {
                         region::local_region_mark_dirty(&iod);
@@ -367,6 +376,11 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
         if res != -(libc::EAGAIN) {
             if op >= 1 && op <= 5 {
                 //UBLK_IO_OP_WRITE | UBLK_IO_OP_WRITE_SAME | UBLK_IO_OP_FLUSH | UBLK_IO_OP_DISCARD | UBLK_IO_OP_WRITE_ZEROES ->
+                #[cfg(feature="piopr")]
+                if region::local_piopr_persist_pending(&iod).is_err() {
+                    q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(-libc::EIO)));
+                    return;
+                }
                 pool_append_pending(&iod, seq.next(iod.op_flags), true);
             }
             q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(res)));

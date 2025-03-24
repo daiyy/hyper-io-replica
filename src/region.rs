@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::collections::HashSet;
 use libublk::sys::ublksrv_io_desc;
 use crate::io_replica::{LOCAL_DIRTY_REGION, LOCAL_REGION_MAP, LOCAL_REGION_SHIFT};
+#[cfg(feature="piopr")]
+use crate::io_replica::LOCAL_PIO_PREGION;
 
 #[derive(Clone)]
 pub struct Region {
@@ -78,8 +80,13 @@ impl Region {
     // return: region id
     #[inline]
     pub fn region_id(&self, start: u64, size: u64) -> u64 {
-        let region_id = start >> self.region_shift;
-        let next_region_id = (start + size - 1) >> self.region_shift;
+        Self::to_region_id(start, size, self.region_shift)
+    }
+
+    #[inline]
+    pub fn to_region_id(start: u64, size: u64, region_shift: u32) -> u64 {
+        let region_id = start >> region_shift;
+        let next_region_id = (start + size - 1) >> region_shift;
 
         // check
         if next_region_id != region_id {
@@ -322,7 +329,6 @@ impl PersistRegionMap {
     }
 
     // mark dirty by region id
-    #[allow(dead_code)]
     pub(crate) async fn mark_dirty(&self, region_id: u64) -> Result<()> {
         self.mark_dirty_one(region_id);
         self.sync().await
@@ -336,6 +342,19 @@ impl PersistRegionMap {
         self.sync().await
     }
 
+    pub(crate) fn clear_dirty_one(&self, region_id: u64) {
+        assert!(region_id < self.size * 8); // assume region id not exceed persist map space
+        let grp_idx = region_id / 64;
+        let bit_idx = region_id % 64;
+
+        let ptr = Self::ptr(self.ptr_value) as *mut u64;
+        unsafe {
+            let ptr = ptr.add(grp_idx as usize);
+            let v = *ptr & !(1 << bit_idx);
+            *ptr = v;
+        }
+    }
+
     pub(crate) async fn clear_all(&self) -> Result<()> {
         let slots = self.size / 8;
         let ptr = Self::ptr(self.ptr_value) as *mut u64;
@@ -345,6 +364,92 @@ impl PersistRegionMap {
         }
         self.sync().await
     }
+}
+
+#[cfg(feature="piopr")]
+pub(crate) struct PendingIoPersistRegion {
+    pending: Arc<AtomicU64>, // pending io count on this region
+}
+
+#[cfg(feature="piopr")]
+impl PendingIoPersistRegion {
+    fn new() -> Self {
+        Self {
+            pending: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+#[cfg(feature="piopr")]
+pub(crate) struct PendingIoPersistRegionMap {
+    mutex: smol::lock::Mutex<()>, // global lock for fields update
+    prmap: PersistRegionMap, // backend persist region
+    map: Vec<PendingIoPersistRegion>,
+    dirty_count: Arc<AtomicU64>, // dirty region count
+    region_size: u64,
+    region_shift: u32,
+    dev_size: u64,
+    nr_regions: u64,
+}
+
+#[cfg(feature="piopr")]
+impl PendingIoPersistRegionMap {
+    pub(crate) fn new(dev_size: u64, region_size: u64, prmap: PersistRegionMap) -> Self {
+        // check region size aligned to sector size
+        let checked_region_size = region_size >> 9 << 9;
+        let region_shift = checked_region_size.ilog2();
+
+        let nr_regions = (dev_size + checked_region_size - 1) / checked_region_size;
+        let map = (0..nr_regions).map(|_| PendingIoPersistRegion::new()).collect();
+        Self {
+            mutex: smol::lock::Mutex::new(()),
+            prmap: prmap,
+            map: map,
+            dirty_count: Arc::new(AtomicU64::new(0)),
+            region_size: checked_region_size,
+            region_shift: region_shift,
+            dev_size: dev_size,
+            nr_regions: nr_regions,
+        }
+    }
+
+    // call in io queue write path
+    pub(crate) fn persist_pending(&self, iod: &ublksrv_io_desc) -> Result<()> {
+        let _lock = self.mutex.lock_blocking();
+        let region_id = Region::iod_to_region_id(iod, self.region_shift);
+        smol::block_on(async {
+            self.prmap.mark_dirty(region_id).await
+        })?;
+
+        let old_val = self.map[region_id as usize].pending.fetch_add(1, Ordering::SeqCst);
+        if old_val == 0 {
+            self.dirty_count.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    // call in flush context only
+    pub(crate) fn dec_pending(&self, v: Vec<crate::pool::PendingIo>) -> Result<()> {
+        let _lock = self.mutex.lock_blocking();
+        for io in v.into_iter() {
+            let region_id = Region::to_region_id(io.offset(), io.size() as u64, self.region_shift);
+            let old_val = self.map[region_id as usize].pending.fetch_sub(1, Ordering::SeqCst);
+            if old_val == 1 {
+                self.dirty_count.fetch_sub(1, Ordering::SeqCst);
+                self.prmap.clear_dirty_one(region_id);
+            }
+        }
+        smol::block_on(async {
+            self.prmap.sync().await
+        })
+    }
+}
+
+#[inline]
+pub(crate) fn local_piopr_persist_pending(iod: &ublksrv_io_desc) -> Result<()> {
+    LOCAL_PIO_PREGION.with(|map| {
+        map.persist_pending(iod)
+    })
 }
 
 #[cfg(test)]

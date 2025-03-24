@@ -41,7 +41,8 @@ reactor = { version = "0.1.0", path = "../reactor", optional = true }
 [features]
 blocking = ["dep:hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
 reactor = ["dep:reactor", "dep:hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
-default = ["reactor"]
+piopr = []
+default = ["reactor", "piopr"]
 
 [[bin]]
 name = "format"
