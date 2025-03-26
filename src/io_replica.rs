@@ -4,7 +4,7 @@ use libublk::uring_async::ublk_wait_and_handle_ios;
 use libublk::{ctrl::UblkCtrl, helpers::IoBuf, UblkError, UblkIORes};
 use libublk::sys::ublksrv_io_desc;
 use libublk::uring_async::ublk_wake_task;
-use log::{trace, info, debug, warn};
+use log::{trace, info, debug, warn, error};
 use serde::{Deserialize, Serialize};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -258,9 +258,30 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
             }
         }
 
+        #[cfg(feature="piopr")]
+        let is_flipped = if state::local_state_logging_enabled() {
+            match region::local_piopr_persist_pending_staging(&iod) {
+                Ok(flipped) => flipped,
+                Err(e) => {
+                    error!("local_piopr_persist_pending_staging failed with error {}", e);
+                    return -libc::EIO;
+                },
+            }
+        } else {
+            // logging disabled
+            false
+        };
+
         let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr);
         let res = q.ublk_submit_sqe(sqe).await;
         if res != -(libc::EAGAIN) {
+            #[cfg(feature="piopr")]
+            if res != 0 {
+                // primary io failed
+                region::local_piopr_handle_primary_io_failed(&iod);
+                // return with origin primary io result
+                return res;
+            }
             match op {
                 libublk::sys::UBLK_IO_OP_WRITE |
                 libublk::sys::UBLK_IO_OP_WRITE_SAME |
@@ -268,7 +289,7 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
                 libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
                     if state::local_state_logging_enabled() {
                         #[cfg(feature="piopr")]
-                        if region::local_piopr_persist_pending(&iod).is_err() {
+                        if region::local_piopr_persist_pending_consist(&iod, is_flipped).is_err() {
                             return -libc::EIO;
                         }
                         pool_append_pending(&iod, seq.next(iod.op_flags), false);
@@ -359,6 +380,7 @@ fn to_absolute_path(p: PathBuf, parent: Option<PathBuf>) -> PathBuf {
     }
 }
 
+// TODO
 fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *mut u8, seq: &IncrSeq) {
     let iod = q.get_iod(tag);
     let op = iod.op_flags & 0xff;
@@ -377,7 +399,7 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
             if op >= 1 && op <= 5 {
                 //UBLK_IO_OP_WRITE | UBLK_IO_OP_WRITE_SAME | UBLK_IO_OP_FLUSH | UBLK_IO_OP_DISCARD | UBLK_IO_OP_WRITE_ZEROES ->
                 #[cfg(feature="piopr")]
-                if region::local_piopr_persist_pending(&iod).is_err() {
+                if region::local_piopr_persist_pending_staging(&iod).is_err() {
                     q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(-libc::EIO)));
                     return;
                 }

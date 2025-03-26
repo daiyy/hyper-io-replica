@@ -7,6 +7,8 @@ use libublk::sys::ublksrv_io_desc;
 use crate::io_replica::{LOCAL_DIRTY_REGION, LOCAL_REGION_MAP, LOCAL_REGION_SHIFT};
 #[cfg(feature="piopr")]
 use crate::io_replica::LOCAL_PIO_PREGION;
+#[cfg(feature="piopr")]
+use log::error;
 
 #[derive(Clone)]
 pub struct Region {
@@ -383,7 +385,8 @@ impl PendingIoPersistRegion {
 #[cfg(feature="piopr")]
 pub(crate) struct PendingIoPersistRegionMap {
     mutex: smol::lock::Mutex<()>, // global lock for fields update
-    prmap: PersistRegionMap, // backend persist region
+    prmap_staging: PersistRegionMap, // backend persist region for staging
+    prmap_consist: PersistRegionMap, // backend persist region for consist
     map: Vec<PendingIoPersistRegion>,
     dirty_count: Arc<AtomicU64>, // dirty region count
     region_size: u64,
@@ -394,7 +397,7 @@ pub(crate) struct PendingIoPersistRegionMap {
 
 #[cfg(feature="piopr")]
 impl PendingIoPersistRegionMap {
-    pub(crate) fn new(dev_size: u64, region_size: u64, prmap: PersistRegionMap) -> Self {
+    pub(crate) fn new(dev_size: u64, region_size: u64, prmap_staging: PersistRegionMap, prmap_consist: PersistRegionMap) -> Self {
         // check region size aligned to sector size
         let checked_region_size = region_size >> 9 << 9;
         let region_shift = checked_region_size.ilog2();
@@ -403,7 +406,8 @@ impl PendingIoPersistRegionMap {
         let map = (0..nr_regions).map(|_| PendingIoPersistRegion::new()).collect();
         Self {
             mutex: smol::lock::Mutex::new(()),
-            prmap: prmap,
+            prmap_staging: prmap_staging,
+            prmap_consist: prmap_consist,
             map: map,
             dirty_count: Arc::new(AtomicU64::new(0)),
             region_size: checked_region_size,
@@ -414,18 +418,65 @@ impl PendingIoPersistRegionMap {
     }
 
     // call in io queue write path
-    pub(crate) fn persist_pending(&self, iod: &ublksrv_io_desc) -> Result<()> {
-        let _lock = self.mutex.lock_blocking();
+    // return:
+    //   - true CLEAN->DIRTY flipped
+    //   - false already in DIRTY
+    pub(crate) fn persist_pending_staging(&self, iod: &ublksrv_io_desc) -> Result<bool> {
         let region_id = Region::iod_to_region_id(iod, self.region_shift);
-        smol::block_on(async {
-            self.prmap.mark_dirty(region_id).await
-        })?;
-
         let old_val = self.map[region_id as usize].pending.fetch_add(1, Ordering::SeqCst);
         if old_val == 0 {
             self.dirty_count.fetch_add(1, Ordering::SeqCst);
         }
+        if old_val > 0 {
+            // if alread dirty, just return
+            return Ok(false);
+        }
+
+        let _lock = self.mutex.lock_blocking();
+        smol::block_on(async {
+            self.prmap_staging.mark_dirty(region_id).await
+        })?;
+        Ok(true)
+    }
+
+    pub(crate) fn persist_pending_consist(&self, iod: &ublksrv_io_desc, is_flipped: bool) -> Result<()> {
+        let region_id = Region::iod_to_region_id(iod, self.region_shift);
+        let old_val = self.map[region_id as usize].pending.fetch_add(1, Ordering::SeqCst);
+        if !is_flipped {
+            return Ok(());
+        }
+        assert!(old_val >= 2);
+
+        let _lock = self.mutex.lock_blocking();
+        smol::block_on(async {
+            self.prmap_consist.mark_dirty(region_id).await
+        })?;
         Ok(())
+    }
+
+    pub(crate) fn handle_primary_io_failed(&self,  iod: &ublksrv_io_desc) {
+        let region_id = Region::iod_to_region_id(iod, self.region_shift);
+        let old_val = self.map[region_id as usize].pending.fetch_sub(1, Ordering::SeqCst);
+        if old_val == 1 {
+            self.dirty_count.fetch_sub(1, Ordering::SeqCst);
+        }
+        if old_val > 1 {
+            return;
+        }
+
+        let _lock = self.mutex.lock_blocking();
+        let res = smol::block_on(async {
+            self.prmap_staging.mark_dirty(region_id).await
+        });
+        if res.is_err() {
+            error!("failed to mark priopr staging area dirty");
+        }
+        let res = smol::block_on(async {
+            self.prmap_consist.mark_dirty(region_id).await
+        });
+        if res.is_err() {
+            error!("failed to mark priopr consist area dirty");
+        }
     }
 
     // call in flush context only
@@ -433,22 +484,52 @@ impl PendingIoPersistRegionMap {
         let _lock = self.mutex.lock_blocking();
         for io in v.into_iter() {
             let region_id = Region::to_region_id(io.offset(), io.size() as u64, self.region_shift);
-            let old_val = self.map[region_id as usize].pending.fetch_sub(1, Ordering::SeqCst);
-            if old_val == 1 {
+            let old_val = self.map[region_id as usize].pending.fetch_sub(2, Ordering::SeqCst);
+            if old_val == 2 {
                 self.dirty_count.fetch_sub(1, Ordering::SeqCst);
-                self.prmap.clear_dirty_one(region_id);
+                self.prmap_staging.clear_dirty_one(region_id);
+                self.prmap_consist.clear_dirty_one(region_id);
             }
         }
-        smol::block_on(async {
-            self.prmap.sync().await
-        })
+        let res = smol::block_on(async {
+            self.prmap_staging.sync().await
+        });
+        if res.is_err() {
+            error!("failed to sync priopr staging area");
+            return res;
+        }
+        let res = smol::block_on(async {
+            self.prmap_consist.sync().await
+        });
+        if res.is_err() {
+            error!("failed to sync priopr consist area");
+            return res;
+        }
+        Ok(())
     }
 }
 
+#[cfg(feature="piopr")]
 #[inline]
-pub(crate) fn local_piopr_persist_pending(iod: &ublksrv_io_desc) -> Result<()> {
+pub(crate) fn local_piopr_persist_pending_staging(iod: &ublksrv_io_desc) -> Result<bool> {
     LOCAL_PIO_PREGION.with(|map| {
-        map.persist_pending(iod)
+        map.persist_pending_staging(iod)
+    })
+}
+
+#[cfg(feature="piopr")]
+#[inline]
+pub(crate) fn local_piopr_persist_pending_consist(iod: &ublksrv_io_desc, is_flipped: bool) -> Result<()> {
+    LOCAL_PIO_PREGION.with(|map| {
+        map.persist_pending_consist(iod, is_flipped)
+    })
+}
+
+#[cfg(feature="piopr")]
+#[inline]
+pub(crate) fn local_piopr_handle_primary_io_failed(iod: &ublksrv_io_desc) {
+    LOCAL_PIO_PREGION.with(|map| {
+        map.handle_primary_io_failed(iod)
     })
 }
 
