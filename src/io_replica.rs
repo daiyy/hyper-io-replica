@@ -239,6 +239,20 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
         }
     }
 
+    #[cfg(feature="piopr")]
+    let is_flipped = if state::local_state_logging_enabled() {
+        match region::local_piopr_persist_pending_staging(&iod) {
+            Ok(flipped) => flipped,
+            Err(e) => {
+                error!("local_piopr_persist_pending_staging failed with error {}", e);
+                return -libc::EIO;
+            },
+        }
+    } else {
+        // logging disabled
+        false
+    };
+
     for _ in 0..4 {
         let op = iod.op_flags & 0xff;
         // either start to handle or retry
@@ -257,20 +271,6 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
                 return 0;
             }
         }
-
-        #[cfg(feature="piopr")]
-        let is_flipped = if state::local_state_logging_enabled() {
-            match region::local_piopr_persist_pending_staging(&iod) {
-                Ok(flipped) => flipped,
-                Err(e) => {
-                    error!("local_piopr_persist_pending_staging failed with error {}", e);
-                    return -libc::EIO;
-                },
-            }
-        } else {
-            // logging disabled
-            false
-        };
 
         let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr);
         let res = q.ublk_submit_sqe(sqe).await;
