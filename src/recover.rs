@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, HashSet};
 use smol::channel;
 use smol::lock::{Mutex, RwLock};
 use smol::Executor;
@@ -20,6 +20,8 @@ use crate::io_replica::LOCAL_RECOVER_CTRL;
 use crate::replica::Replica;
 use crate::task::{TaskState, TaskId};
 use crate::pool::{TgtPendingBlocksPool, PendingIo};
+
+const DEFAULT_FORWARD_FINAL_TRANSITION_THRESHOLD: usize = 4;
 
 const RECOVERY_WAIT_ON_MS: u64 = 50;
 const RECOVERY_FINAL_WAIT_INTERVAL_MS: u64 = 10;
@@ -105,6 +107,8 @@ pub(crate) struct RecoverCtrl {
     concurrency: Arc<AtomicUsize>,
     tx: channel::Sender<bool>,
     rx: channel::Receiver<bool>,
+    // track regions dirty again during recover process
+    region_dirty_again: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl fmt::Debug for RecoverCtrl {
@@ -148,6 +152,7 @@ impl Default for RecoverCtrl {
             concurrency: Arc::new(AtomicUsize::new(0)),
             tx: tx,
             rx: rx,
+            region_dirty_again: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 }
@@ -244,6 +249,7 @@ impl RecoverCtrl {
             concurrency: Arc::new(AtomicUsize::new(0)),
             tx: tx,
             rx: rx,
+            region_dirty_again: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -303,7 +309,7 @@ impl RecoverCtrl {
         self.rebuild_mode_full(state::TGT_STATE_RECOVERY_FORWARD_FULL);
     }
 
-    pub(crate) fn rebuild_mode_forward_part(&self, g_region: Rc<region::Region>) {
+    pub(crate) fn rebuild_mode_forward_part(&self, g_region: Rc<region::Region>, v_region_dirty_again: Vec<u64>) {
         // mode as whole transaction lock
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
@@ -324,6 +330,15 @@ impl RecoverCtrl {
             let region = Arc::new(Mutex::new(Region::new(RecoverState::NoSync)));
             map.insert(*i, region.clone());
             nosync.push((*i, region));
+        }
+        // try merge with region dirty again
+        for i in v_region_dirty_again.iter() {
+            let region = Arc::new(Mutex::new(Region::new(RecoverState::NoSync)));
+            map.insert(*i, region.clone());
+            nosync.push((*i, region));
+        }
+        if v_region_dirty_again.len() > 0 {
+            nosync.dedup_by_key(|i| i.0);
         }
 
         // sort by key
@@ -448,6 +463,11 @@ impl RecoverCtrl {
             RecoverState::Recovering => {
                 Self::wait_on(r.clone()).await;
             },
+            RecoverState::Clean => {
+                if !self.region_dirty_again.read().await.contains(&region_id) {
+                    let _ = self.region_dirty_again.write().await.insert(region_id);
+                }
+            },
             _ => {
             },
         };
@@ -509,8 +529,33 @@ impl RecoverCtrl {
         Ok(())
     }
 
+    // transition to:
+    //  - logging enabled (recover done)
+    //  - forward part again
+    //  - forward final
+    async fn do_state_transition<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>) {
+        // hold region_dirty_again write lock as global transition lock
+        let mut lock = self.region_dirty_again.write().await;
+        // time to check if we have region dirty again during the whole recover process
+        let dirty_count = lock.len();
+        if dirty_count > DEFAULT_FORWARD_FINAL_TRANSITION_THRESHOLD {
+            // too much dirty regions start over forward part again
+            let mut v_region_dirty_again: Vec<u64> = lock.drain().into_iter().collect();
+            self.rebuild_mode_forward_part(g_region.clone(), v_region_dirty_again);
+            return;
+        } else if dirty_count == 0 {
+            // all regions recovered, clear recover state bits
+            let mut mode_lock = self.mode.write_arc().await;
+            let state = self.g_state.clear_all_recover_bits();
+            let _ = pool.borrow().meta_dev.preg_clear_all().await;
+            *mode_lock = state;
+            return;
+        }
+        // transition to forward_final staging
+    }
+
     // main control of recover process
-    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, exec: Executor<'a>) {
+    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>, exec: Executor<'a>) {
         let replica = pool.borrow().replica_device.dup().await;
         // prepare recover mode
         let mode = self.mode.read_arc().await;
@@ -558,11 +603,7 @@ impl RecoverCtrl {
             continue;
         }
         assert!(self.get_inflight() == 0 && self.get_pending() == 0);
-        // all regions recovered, clear recover state bits
-        let mut mode_lock = self.mode.write_arc().await;
-        let state = self.g_state.clear_all_recover_bits();
-        let _ = pool.borrow().meta_dev.preg_clear_all().await;
-        *mode_lock = state;
+        self.do_state_transition(pool, g_region).await;
     }
 
     #[allow(dead_code)]
@@ -649,7 +690,7 @@ impl RecoverCtrl {
         v
     }
 
-    pub(crate) async fn main_loop<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, task_state: TaskState) {
+    pub(crate) async fn main_loop<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>, task_state: TaskState) {
         task_state.wait_on_tgt_pool_start().await;
         task_state.set_start(TaskId::Recover);
         // keep waiting on next cmd from channel
@@ -658,7 +699,7 @@ impl RecoverCtrl {
             let exec = smol::Executor::new();
             task_state.set_busy(TaskId::Recover);
             if cmd {
-                self.do_recovery(pool.clone(), exec).await;
+                self.do_recovery(pool.clone(), g_region.clone(), exec).await;
             }
             task_state.clear_busy(TaskId::Recover);
         }

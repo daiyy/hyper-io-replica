@@ -74,7 +74,7 @@ impl Command {
                                     format!("state set to {:?}", state)
                                 },
                                 3 => {
-                                    recover.rebuild_mode_forward_part(region);
+                                    recover.rebuild_mode_forward_part(region, Vec::new());
                                     recover.kickoff();
                                     state.set_logging_enable();
                                     format!("state set to {:?}", state)
