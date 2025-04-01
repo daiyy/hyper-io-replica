@@ -68,15 +68,15 @@ impl Command {
                                     format!("state set to {:?}", state)
                                 },
                                 2 => {
+                                    state.set_logging_disable();
                                     recover.rebuild_mode_forward_full();
                                     recover.kickoff();
-                                    state.set_logging_enable();
                                     format!("state set to {:?}", state)
                                 },
                                 3 => {
+                                    state.set_logging_disable();
                                     recover.rebuild_mode_forward_part(region, Vec::new());
                                     recover.kickoff();
-                                    state.set_logging_enable();
                                     format!("state set to {:?}", state)
                                 },
                                 4 => {
