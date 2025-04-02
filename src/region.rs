@@ -417,12 +417,7 @@ impl PendingIoPersistRegionMap {
         }
     }
 
-    // call in io queue write path
-    // return:
-    //   - true CLEAN->DIRTY flipped
-    //   - false already in DIRTY
-    pub(crate) fn persist_pending_staging(&self, iod: &ublksrv_io_desc) -> Result<bool> {
-        let region_id = Region::iod_to_region_id(iod, self.region_shift);
+    pub(crate) fn persist_region_staging(&self, region_id: u64) -> Result<bool> {
         let old_val = self.map[region_id as usize].pending.fetch_add(1, Ordering::SeqCst);
         if old_val == 0 {
             self.dirty_count.fetch_add(1, Ordering::SeqCst);
@@ -439,8 +434,7 @@ impl PendingIoPersistRegionMap {
         Ok(true)
     }
 
-    pub(crate) fn persist_pending_consist(&self, iod: &ublksrv_io_desc, is_flipped: bool) -> Result<()> {
-        let region_id = Region::iod_to_region_id(iod, self.region_shift);
+    pub(crate) fn persist_region_consist(&self, region_id: u64, is_flipped: bool) -> Result<()> {
         let old_val = self.map[region_id as usize].pending.fetch_add(1, Ordering::SeqCst);
         if !is_flipped {
             return Ok(());
@@ -452,6 +446,20 @@ impl PendingIoPersistRegionMap {
             self.prmap_consist.mark_dirty(region_id).await
         })?;
         Ok(())
+    }
+
+    // call in io queue write path
+    // return:
+    //   - true CLEAN->DIRTY flipped
+    //   - false already in DIRTY
+    pub(crate) fn persist_pending_staging(&self, iod: &ublksrv_io_desc) -> Result<bool> {
+        let region_id = Region::iod_to_region_id(iod, self.region_shift);
+        self.persist_region_staging(region_id)
+    }
+
+    pub(crate) fn persist_pending_consist(&self, iod: &ublksrv_io_desc, is_flipped: bool) -> Result<()> {
+        let region_id = Region::iod_to_region_id(iod, self.region_shift);
+        self.persist_region_consist(region_id, is_flipped)
     }
 
     pub(crate) fn handle_primary_io_failed(&self,  iod: &ublksrv_io_desc) {
@@ -507,6 +515,22 @@ impl PendingIoPersistRegionMap {
         }
         Ok(())
     }
+}
+
+#[cfg(feature="piopr")]
+#[inline]
+pub(crate) fn local_piopr_persist_region_staging(region: u64) -> Result<bool> {
+    LOCAL_PIO_PREGION.with(|map| {
+        map.persist_region_staging(region)
+    })
+}
+
+#[cfg(feature="piopr")]
+#[inline]
+pub(crate) fn local_piopr_persist_region_consist(region: u64, is_flipped: bool) -> Result<()> {
+    LOCAL_PIO_PREGION.with(|map| {
+        map.persist_region_consist(region, is_flipped)
+    })
 }
 
 #[cfg(feature="piopr")]
