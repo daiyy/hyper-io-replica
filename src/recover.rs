@@ -367,6 +367,53 @@ impl RecoverCtrl {
         *mode_lock = state::TGT_STATE_RECOVERY_FORWARD_PART;
     }
 
+    pub(crate) fn rebuild_mode_forward_final(&self, g_region: Rc<region::Region>, v_region_dirty_again: Vec<u64>) {
+        // mode as whole transaction lock
+        let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
+
+        // we can now safely change global state
+        self.g_state.set_recovery_forward_final();
+
+        // rebuild
+        let mut map = HashMap::new();
+        let nr_regions = g_region.nr_regions();
+        for i in 0..nr_regions {
+            map.insert(i, Arc::new(Mutex::new(Region::new(RecoverState::Clean))));
+        }
+        let mut nosync = Vec::new();
+        // region dirty again
+        for i in v_region_dirty_again.iter() {
+            let region = Arc::new(Mutex::new(Region::new(RecoverState::NoSync)));
+            map.insert(*i, region.clone());
+            nosync.push((*i, region));
+        }
+
+        // sort by key
+        let mut sorted: Vec<_> = nosync.iter().collect();
+        sorted.sort_by_key(|i| i.0);
+
+        // build queue for NoSync region
+        let mut queue = VecDeque::new();
+        for (region_id, region) in sorted.into_iter() {
+            queue.push_back((*region_id, region.clone()));
+        }
+
+        self.inc_pending(queue.len() as u64);
+
+        // update inner
+        let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
+        *lock = map;
+
+        let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
+        *lock = queue;
+
+        // reset global region and clear dirty flag
+        g_region.reset();
+
+        // release mode lock
+        *mode_lock = state::TGT_STATE_RECOVERY_FORWARD_FINAL;
+    }
+
     pub(crate) fn mode(&self) -> u64 {
         *self.mode.read_arc_blocking()
     }
@@ -414,11 +461,18 @@ impl RecoverCtrl {
         }
     }
 
+    pub(crate) async fn wait_on_forward_final(&self) {
+        while !self.g_state.is_not_recovery_and_logging_enabled() {
+            smol::Timer::after(std::time::Duration::from_millis(RECOVERY_WAIT_ON_MS)).await;
+        }
+    }
+
     // read op run in queue executor context
     pub(crate) async fn q_recover_read(&self, region_id: u64) {
         let mode = *self.mode.read_arc().await;
         if mode == state::TGT_STATE_RECOVERY_FORWARD_FULL
             || mode == state::TGT_STATE_RECOVERY_FORWARD_PART
+            || mode == state::TGT_STATE_RECOVERY_FORWARD_FINAL
         {
             // in forward mode, data on primary is updated,
             // no need to wait for read op
@@ -449,6 +503,9 @@ impl RecoverCtrl {
 
     // write op run in queue executor context
     pub(crate) async fn q_recover_write(&self, region_id: u64) {
+        if self.g_state.is_recovery_forward_final() {
+            return self.wait_on_forward_final().await;
+        }
         // in both forward and reverse mode, write io will be blocked
         let r = self.lookup(region_id).await;
         let region = r.lock().await;
@@ -540,8 +597,9 @@ impl RecoverCtrl {
         let dirty_count = lock.len();
         if dirty_count > DEFAULT_FORWARD_FINAL_TRANSITION_THRESHOLD {
             // too much dirty regions start over forward part again
-            let mut v_region_dirty_again: Vec<u64> = lock.drain().into_iter().collect();
+            let v_region_dirty_again: Vec<u64> = lock.drain().into_iter().collect();
             self.rebuild_mode_forward_part(g_region.clone(), v_region_dirty_again);
+            self.kickoff();
             return;
         } else if dirty_count == 0 {
             // all regions recovered, clear recover state bits
@@ -552,6 +610,10 @@ impl RecoverCtrl {
             return;
         }
         // transition to forward_final staging
+        let v_region_dirty_again: Vec<u64> = lock.drain().into_iter().collect();
+        self.rebuild_mode_forward_final(g_region.clone(), v_region_dirty_again);
+        self.kickoff();
+        return;
     }
 
     // main control of recover process
