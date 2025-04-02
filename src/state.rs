@@ -191,6 +191,14 @@ impl GlobalTgtState {
             TGT_STATE_RECOVERY_FORWARD_PART2 | TGT_STATE_RECOVERY_FORWARD_FINAL | TGT_STATE_RECOVERY_REVERSE_FULL;
         self.inner.load(Ordering::SeqCst) & recovery_state > 0
     }
+
+    pub(crate) fn is_recovery_forward_final(&self) -> bool {
+        self.inner.load(Ordering::SeqCst) & TGT_STATE_RECOVERY_FORWARD_FINAL == TGT_STATE_RECOVERY_FORWARD_FINAL
+    }
+
+    pub(crate) fn is_not_recovery_and_logging_enabled(&self) -> bool {
+        self.inner.load(Ordering::SeqCst) == TGT_STATE_LOGGING_ENABLED
+    }
 }
 
 #[inline]
