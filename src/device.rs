@@ -82,6 +82,8 @@ pub struct MetaDeviceDesc {
     pub offset: u64, // start of meta area, used for flush log
     pub size: u64,
     pub region_map_offset: u64, // offset for dirty region map
+    #[cfg(feature="piopr")]
+    pub region_map2_offset: u64, // offset for dirty region map2
     pub region_map_size: u64, // size of dirty region map aligned to 4K block
     pub sb_offset: u64,
 }
@@ -103,6 +105,8 @@ impl MetaDeviceDesc {
             offset: pri.tgt_device_size,
             size: pri.reserved_size,
             region_map_offset: pri.tgt_device_size + 4096,
+            #[cfg(feature="piopr")]
+            region_map2_offset: pri.tgt_device_size + 4096 + 2*1024*1024, // 2MiB offset
             region_map_size: aligned_region_map_size,
             // align sb offset to last sector
             sb_offset: (pri.tgt_raw_size - 512) >> 9 << 9,
@@ -116,6 +120,7 @@ pub struct MetaDevice {
     pub flush_log: FlushLog,
     pub sb: SuperBlock,
     pub preg: PersistRegionMap,
+    pub preg2: PersistRegionMap,
 }
 
 impl MetaDevice {
@@ -142,6 +147,8 @@ impl MetaDevice {
         let _ = file.read_exact(fl_raw.as_mut_u8_slice()).await;
 
         let preg = PersistRegionMap::open(&dev_path, desc.region_map_offset, desc.region_map_size).await.expect("failed to open persist region map on meta area");
+        #[cfg(feature="piopr")]
+        let preg2 = PersistRegionMap::open(&dev_path, desc.region_map2_offset, desc.region_map_size).await.expect("failed to open persist region map2 on meta area");
 
         Self {
             desc: desc.to_owned(),
@@ -149,6 +156,7 @@ impl MetaDevice {
             flush_log: FlushLog::from(&fl_raw),
             sb: SuperBlock::from(&sb_raw),
             preg: preg,
+            preg2: preg2,
         }
     }
 
