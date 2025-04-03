@@ -142,7 +142,7 @@ std::thread_local! {
 
 #[cfg(feature="piopr")]
 std::thread_local! {
-    pub(crate) static LOCAL_PIO_PREGION: Arc<region::PendingIoPersistRegionMap> = panic!("local pending io persist region is not yet init");
+    pub(crate) static LOCAL_PIO_PREGION: RefCell<Arc<region::PendingIoPersistRegionMap>> = panic!("local pending io persist region is not yet init");
 }
 
 #[inline]
@@ -294,6 +294,10 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
                         }
                         pool_append_pending(&iod, seq.next(iod.op_flags), false);
                     } else {
+                        #[cfg(feature="piopr")]
+                        if region::local_piopr_persist_pending_consist(&iod, is_flipped).is_err() {
+                            return -libc::EIO;
+                        }
                         region::local_region_mark_dirty(&iod);
                     }
                 },
@@ -733,6 +737,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     // check region size with checked one
     assert!(lo.region_size == g_region.region_size());
 
+    #[cfg(feature="piopr")]
+    let piopr = Arc::new(region::PendingIoPersistRegionMap::new(lo.device_size, region_sz, meta_dev.preg.clone(), meta_dev.preg2.clone()));
+
     // load and fill in-memory region tracker with persist region
     let v_dirty_regions = meta_dev.preg_load();
     if v_dirty_regions.len() > 0 {
@@ -823,6 +830,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
             // setup thread local region shift value
             LOCAL_REGION_SHIFT.set(region_shift);
+
+            // setup piopr
+            #[cfg(feature="piopr")]
+            LOCAL_PIO_PREGION.set(piopr.clone());
 
             new_q_fn(qid, dev, g_seq)
         },

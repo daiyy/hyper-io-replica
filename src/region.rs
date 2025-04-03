@@ -106,7 +106,8 @@ impl Region {
 
         // FIXME: this check should be remove one day
         if next_region_id != region_id {
-            panic!("cross region access is not allowned - region id {}, next: {}, iod: {:?}", region_id, next_region_id, iod);
+            panic!("cross region access is not allowned - region id {}, next: {}, region_shift: {}, iod: {:?}",
+                region_id, next_region_id, region_shift, iod);
         }
         return region_id;
     }
@@ -221,6 +222,7 @@ pub(crate) fn local_region_shift() -> u32 {
     LOCAL_REGION_SHIFT.with(|v| { *(v.borrow()) })
 }
 
+#[derive(Clone)]
 pub struct PersistRegionMap {
     offset: u64,
     size: u64,
@@ -520,7 +522,7 @@ impl PendingIoPersistRegionMap {
 #[cfg(feature="piopr")]
 #[inline]
 pub(crate) fn local_piopr_persist_region_staging(region: u64) -> Result<bool> {
-    LOCAL_PIO_PREGION.with(|map| {
+    LOCAL_PIO_PREGION.with_borrow(|map| {
         map.persist_region_staging(region)
     })
 }
@@ -528,7 +530,7 @@ pub(crate) fn local_piopr_persist_region_staging(region: u64) -> Result<bool> {
 #[cfg(feature="piopr")]
 #[inline]
 pub(crate) fn local_piopr_persist_region_consist(region: u64, is_flipped: bool) -> Result<()> {
-    LOCAL_PIO_PREGION.with(|map| {
+    LOCAL_PIO_PREGION.with_borrow(|map| {
         map.persist_region_consist(region, is_flipped)
     })
 }
@@ -536,7 +538,7 @@ pub(crate) fn local_piopr_persist_region_consist(region: u64, is_flipped: bool) 
 #[cfg(feature="piopr")]
 #[inline]
 pub(crate) fn local_piopr_persist_pending_staging(iod: &ublksrv_io_desc) -> Result<bool> {
-    LOCAL_PIO_PREGION.with(|map| {
+    LOCAL_PIO_PREGION.with_borrow(|map| {
         map.persist_pending_staging(iod)
     })
 }
@@ -544,7 +546,7 @@ pub(crate) fn local_piopr_persist_pending_staging(iod: &ublksrv_io_desc) -> Resu
 #[cfg(feature="piopr")]
 #[inline]
 pub(crate) fn local_piopr_persist_pending_consist(iod: &ublksrv_io_desc, is_flipped: bool) -> Result<()> {
-    LOCAL_PIO_PREGION.with(|map| {
+    LOCAL_PIO_PREGION.with_borrow(|map| {
         map.persist_pending_consist(iod, is_flipped)
     })
 }
@@ -552,7 +554,7 @@ pub(crate) fn local_piopr_persist_pending_consist(iod: &ublksrv_io_desc, is_flip
 #[cfg(feature="piopr")]
 #[inline]
 pub(crate) fn local_piopr_handle_primary_io_failed(iod: &ublksrv_io_desc) {
-    LOCAL_PIO_PREGION.with(|map| {
+    LOCAL_PIO_PREGION.with_borrow(|map| {
         map.handle_primary_io_failed(iod)
     })
 }
