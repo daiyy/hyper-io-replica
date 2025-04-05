@@ -8,7 +8,7 @@ use crate::io_replica::{LOCAL_DIRTY_REGION, LOCAL_REGION_MAP, LOCAL_REGION_SHIFT
 #[cfg(feature="piopr")]
 use crate::io_replica::LOCAL_PIO_PREGION;
 #[cfg(feature="piopr")]
-use log::error;
+use log::{debug, error};
 
 #[derive(Clone)]
 pub struct Region {
@@ -426,6 +426,7 @@ impl PendingIoPersistRegionMap {
         }
         if old_val > 0 {
             // if alread dirty, just return
+            debug!("PIoRegion - Staging Area - Region: {region_id} already dirty");
             return Ok(false);
         }
 
@@ -433,12 +434,14 @@ impl PendingIoPersistRegionMap {
         smol::block_on(async {
             self.prmap_staging.mark_dirty(region_id).await
         })?;
+        debug!("PIoRegion - Staging Area - Region: {region_id} mark dirty");
         Ok(true)
     }
 
     pub(crate) fn persist_region_consist(&self, region_id: u64, is_flipped: bool) -> Result<()> {
         let old_val = self.map[region_id as usize].pending.fetch_add(1, Ordering::SeqCst);
         if !is_flipped {
+            debug!("PIoRegion - Consist Area - Region: {region_id}, is flipped {is_flipped}");
             return Ok(());
         }
         assert!(old_val >= 2);
@@ -447,6 +450,7 @@ impl PendingIoPersistRegionMap {
         smol::block_on(async {
             self.prmap_consist.mark_dirty(region_id).await
         })?;
+        debug!("PIoRegion - Consist Area - Region: {region_id} mark dirty, is flipped {is_flipped}");
         Ok(())
     }
 
