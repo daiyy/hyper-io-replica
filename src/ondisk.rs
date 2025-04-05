@@ -9,12 +9,15 @@ pub struct SuperBlockRaw {
     pub allocated_size: u64,
     pub reserved_size: u64,
     pub metadata_offset: u64,
+    pub persist_region_map_offset: u64,
+    pub persist_region_map2_offset: u64,
+    pub persist_region_map_size: u64,
     pub creation_timestamp: u64,
     pub startup_timestamp: u64,
     pub shutdown_timestamp: u64, // timestamp is 0 means not a clean shutdown
     pub last_cno: u64,
     pub replica_dev_uuid: [u8; 16],
-    padding: [u64; 53],
+    padding: [u64; 50],
 }
 
 impl fmt::Display for SuperBlockRaw {
@@ -40,6 +43,8 @@ impl fmt::Display for SuperBlockRaw {
         writeln!(f, "  checksum: {:x}, last cno: {}", self.checksum, self.last_cno)?;
         writeln!(f, "  allocated_size: {}, reserved_size: {}, metadata_offset: {}",
             self.allocated_size, self.reserved_size, self.metadata_offset)?;
+        writeln!(f, "  persist region map offset: {}, map2 offset: {}, map size: {}",
+            self.persist_region_map_offset, self.persist_region_map2_offset, self.persist_region_map_size)?;
         write!(f, "  creation_time: {}, startup_time: {}, shutdown_time: {}",
             create.format(&Rfc3339).unwrap(),
             startup.format(&Rfc3339).unwrap(),
@@ -55,12 +60,15 @@ impl Default for SuperBlockRaw {
             allocated_size: 0,
             reserved_size: 0,
             metadata_offset: 0,
+            persist_region_map_offset: 0,
+            persist_region_map2_offset: 0,
+            persist_region_map_size: 0,
             creation_timestamp: 0,
             startup_timestamp: 0,
             shutdown_timestamp: 0,
             last_cno: 0,
             replica_dev_uuid: [0u8; 16],
-            padding: [0u64; 53],
+            padding: [0u64; 50],
         }
     }
 }
