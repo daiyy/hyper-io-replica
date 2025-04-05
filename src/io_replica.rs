@@ -284,18 +284,18 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
         let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr);
         let res = q.ublk_submit_sqe(sqe).await;
         if res != -(libc::EAGAIN) {
-            #[cfg(feature="piopr")]
-            if res != 0 {
-                // primary io failed
-                region::local_piopr_handle_primary_io_failed(&iod);
-                // return with origin primary io result
-                return res;
-            }
             match op {
                 libublk::sys::UBLK_IO_OP_WRITE |
                 libublk::sys::UBLK_IO_OP_WRITE_SAME |
                 libublk::sys::UBLK_IO_OP_DISCARD |
                 libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
+                    #[cfg(feature="piopr")]
+                    if res != 0 {
+                        // primary io failed
+                        region::local_piopr_handle_primary_io_failed(&iod);
+                        // return with origin primary io result
+                        return res;
+                    }
                     if state::local_state_logging_enabled() {
                         #[cfg(feature="piopr")]
                         if region::local_piopr_persist_pending_consist(&iod, is_flipped).is_err() {
