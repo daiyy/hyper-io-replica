@@ -269,6 +269,7 @@ impl PersistRegionMap {
         if ptr == libc::MAP_FAILED {
             return Err(std::io::Error::last_os_error());
         }
+        debug!("PersistRegionMap - Open - offset: {offset}, size: {size}, ptr: {ptr:p}");
         Ok(Self {
             offset,
             size,
