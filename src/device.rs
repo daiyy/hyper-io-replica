@@ -202,6 +202,20 @@ impl MetaDevice {
                 .as_secs();
         sb_raw.creation_timestamp = now;
 
+        // clear all bits in persist region map area
+        let mut zero = Vec::with_capacity(desc.region_map_size as usize);
+        zero.resize(desc.region_map_size as usize, 0);
+        info!("format persist region map at {}", desc.region_map_offset);
+        let _ = file.seek(SeekFrom::Start(desc.region_map_offset)).await;
+        let res = file.write(&zero).await;
+        info!("flush persist region map res: {:?}", res);
+        if cfg!(feature="piopr") {
+            info!("format persist region map2 at {}", desc.region_map2_offset);
+            let _ = file.seek(SeekFrom::Start(desc.region_map2_offset)).await;
+            let res = file.write(&zero).await;
+            info!("flush persist region map2 res: {:?}", res);
+        }
+
         info!("write flush log at {}", desc.offset);
         let _ = file.seek(SeekFrom::Start(desc.offset)).await;
         let res = file.write(fl_raw.as_u8_slice()).await;
