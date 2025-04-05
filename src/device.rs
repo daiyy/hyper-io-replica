@@ -104,7 +104,7 @@ impl MetaDeviceDesc {
     pub fn from_primary_device(pri: &PrimaryDevice) -> Self {
         let nr_regions = pri.tgt_device_size / pri.region_size;
         let region_map_size = (nr_regions + 64 - 1) / 64;
-        let aligned_region_map_size = (region_map_size + 4096 - 1) / 4096;
+        let aligned_region_map_size = (region_map_size + 4096 - 1) >> 11 << 11;
         Self {
             device_path: pri.device_path.clone(),
             offset: pri.tgt_device_size,
