@@ -290,10 +290,11 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
                 libublk::sys::UBLK_IO_OP_DISCARD |
                 libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
                     #[cfg(feature="piopr")]
-                    if res != 0 {
+                    if res < 0 {
                         // primary io failed
                         region::local_piopr_handle_primary_io_failed(&iod);
                         // return with origin primary io result
+                        error!("primary io failed with io error: {res}");
                         return res;
                     }
                     if state::local_state_logging_enabled() {
