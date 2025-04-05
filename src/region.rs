@@ -445,7 +445,7 @@ impl PendingIoPersistRegionMap {
             debug!("PIoRegion - Consist Area - Region: {region_id}, is flipped {is_flipped}");
             return Ok(());
         }
-        assert!(old_val >= 2);
+        assert!(old_val >= 1);
 
         let _lock = self.mutex.lock_blocking();
         smol::block_on(async {
