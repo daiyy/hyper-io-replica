@@ -661,6 +661,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     // get meta device desc from primary device
     let meta_dev_desc = device::MetaDeviceDesc::from_primary_device(&pri_dev);
+    info!("{}", meta_dev_desc);
     // open meta device for consistency check
     let mut meta_dev = smol::block_on(async {
         MetaDevice::open(&meta_dev_desc).await
