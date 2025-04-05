@@ -90,8 +90,13 @@ pub struct MetaDeviceDesc {
 
 impl fmt::Display for MetaDeviceDesc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, sb_offset: {}}}",
-            self.device_path, self.offset, self.size, self.sb_offset)
+        if cfg!(feature="piopr") {
+            write!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, region_map_offset: {}, region_map2_offset: {}, region_map_size {}, sb_offset: {}}}",
+                self.device_path, self.offset, self.size, self.region_map_offset, self.region_map2_offset, self.region_map_size, self.sb_offset)
+        } else {
+            write!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, region_map_offset: {}, region_map_size {}, sb_offset: {}}}",
+                self.device_path, self.offset, self.size, self.region_map_offset, self.region_map_size, self.sb_offset)
+        }
     }
 }
 
