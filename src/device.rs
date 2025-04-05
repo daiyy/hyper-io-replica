@@ -184,6 +184,13 @@ impl MetaDevice {
         sb_raw.allocated_size = primary_size;
         sb_raw.reserved_size = desc.size;
         sb_raw.metadata_offset = desc.offset;
+        sb_raw.persist_region_map_offset = desc.region_map_offset;
+        if cfg!(feature="piopr") {
+            sb_raw.persist_region_map2_offset = desc.region_map2_offset;
+        } else {
+            sb_raw.persist_region_map2_offset = 0;
+        }
+        sb_raw.persist_region_map_size = desc.region_map_size;
         sb_raw.replica_dev_uuid = replica_uuid.to_owned();
         let now = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
