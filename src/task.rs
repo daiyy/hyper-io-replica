@@ -136,8 +136,8 @@ impl<T: Replica + 'static> TaskManager<T> {
             task_state.set_busy(TaskId::PeriodicReplicaFlush);
             let now = SystemTime::now();
             let cno = replica_device.flush().await.expect("replica deivce flush failed");
-            debug!("TgtPendingBlocksPool periodic task replica flush - done with segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
             if last_replica_ondisk_cno < cno && last_primary_metadata_cno < cno {
+                debug!("TgtPendingBlocksPool periodic task replica flush - done with segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
                 // only sync log entry cno for an effective replica flush
                 let _ = pool.borrow_mut().meta_dev.flush_log_sync(cno).await;
                 last_primary_metadata_cno = cno;
