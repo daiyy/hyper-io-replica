@@ -399,6 +399,23 @@ pub(crate) struct PendingIoPersistRegionMap {
 }
 
 #[cfg(feature="piopr")]
+impl fmt::Display for PendingIoPersistRegionMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "== PendingIoPersistRegionMap - region size: {}, region shift: {}, device size: {}, nr regions: {} ==",
+            self.region_size, self.region_shift, self.dev_size, self.nr_regions)?;
+        for region_id in 0..self.nr_regions {
+            let pending_count = self.map[region_id as usize].pending.load(Ordering::SeqCst);
+            if pending_count > 0 {
+                writeln!(f, "  region: {region_id} - pending count: {pending_count}")?;
+            }
+        }
+        let _lock = self.mutex.lock_blocking();
+        writeln!(f, "  Drity Region in Staging Map {:?}", self.prmap_staging.load())?;
+        write!(f, "  Drity Region in Consist Map {:?}", self.prmap_consist.load())
+    }
+}
+
+#[cfg(feature="piopr")]
 impl PendingIoPersistRegionMap {
     pub(crate) fn new(dev_size: u64, region_size: u64, prmap_staging: PersistRegionMap, prmap_consist: PersistRegionMap) -> Self {
         // check region size aligned to sector size
