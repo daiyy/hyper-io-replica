@@ -142,6 +142,11 @@ impl<T: Replica + 'static> TaskManager<T> {
                 let _ = pool.borrow_mut().meta_dev.flush_log_sync(cno).await;
                 last_primary_metadata_cno = cno;
                 last_replica_ondisk_cno = cno;
+                if cfg!(feature = "piopr") {
+                    let mut v_iometa = Vec::new();
+                    v_iometa.append(pool.borrow_mut().flush_queue.as_mut());
+                    pool.borrow().piopr.dec_pending(v_iometa).expect("failed to dec pending for piopr");
+                }
             }
             task_state.clear_busy(TaskId::PeriodicReplicaFlush);
         }

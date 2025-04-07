@@ -2,6 +2,8 @@ use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::{HashMap, BTreeMap};
+#[cfg(feature="piopr")]
+use std::sync::Arc;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
@@ -14,6 +16,14 @@ use crate::device::MetaDevice;
 use crate::task::{TaskState, TaskId};
 use crate::seq::IncrSeq;
 use crate::stats::PoolStats;
+
+#[cfg(feature="piopr")]
+pub(crate) struct PendingIoMeta {
+    pub(crate) flags: u32,
+    pub(crate) size: u32,
+    pub(crate) offset: u64,
+    pub(crate) seq: u64,
+}
 
 pub(crate) enum PendingIo {
     Write(WriteIo),
@@ -110,6 +120,24 @@ impl PendingIo {
             Self::Flush(io) => io.seq,
         }
     }
+
+    #[cfg(feature="piopr")]
+    #[inline]
+    pub(crate) fn to_meta(&self) -> Option<PendingIoMeta> {
+        match self {
+            Self::Write(io) => {
+                return Some(PendingIoMeta {
+                    flags: io.flags,
+                    size: io.size,
+                    offset: io.offset,
+                    seq: io.seq,
+                });
+            },
+            Self::Flush(io) => {
+                return None;
+            },
+        }
+    }
 }
 
 pub(crate) struct LocalPendingBlocksPool {
@@ -187,9 +215,15 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     pub(crate) dev_id: u32,
     pub(crate) g_seq: IncrSeq,
     pub(crate) l_seq: u64,
+    #[cfg(feature="piopr")]
+    pub(crate) piopr: Arc<crate::region::PendingIoPersistRegionMap>,
+    #[cfg(feature="piopr")]
+    // tracking pending io wait for flush
+    pub(crate) flush_queue: Vec<PendingIoMeta>,
 }
 
 impl<T> TgtPendingBlocksPool<T> {
+    #[cfg(not(feature="piopr"))]
     pub(crate) fn new(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev: MetaDevice, dev_id: u32, g_seq: IncrSeq) -> Self
         where T: Replica + 'static
     {
@@ -211,6 +245,34 @@ impl<T> TgtPendingBlocksPool<T> {
             dev_id,
             g_seq,
             l_seq: 1,
+        }
+    }
+
+    #[cfg(feature="piopr")]
+    pub(crate) fn new_with_piopr(max_capacity: usize, replica_path: &str, replica_device: T, meta_dev: MetaDevice, dev_id: u32, g_seq: IncrSeq,
+            piopr: Arc<crate::region::PendingIoPersistRegionMap>) -> Self
+        where T: Replica + 'static
+    {
+        let (tx, rx) = channel::unbounded();
+        Self {
+            rx: rx,
+            tx: tx,
+            staging_data_queue: Vec::new(),
+            staging_data_queue_bytes: 0,
+            staging_seq_queue: BTreeMap::new(),
+            staging_seq_queue_bytes: 0,
+            pending_queue: Vec::new(),
+            pending_bytes: 0,
+            inflight_bytes: 0,
+            max_capacity: max_capacity,
+            replica_path: replica_path.to_string(),
+            replica_device: replica_device,
+            meta_dev,
+            dev_id,
+            g_seq,
+            l_seq: 1,
+            piopr: piopr,
+            flush_queue: Vec::new(),
         }
     }
 
@@ -304,6 +366,8 @@ impl<T> TgtPendingBlocksPool<T> {
         inflight_dirty_regions.dedup();
         pool.borrow_mut().inflight_bytes = bytes;
         let start = std::time::Instant::now();
+        #[cfg(feature="piopr")]
+        let mut v_iometa: Vec<PendingIoMeta> = pending.iter().filter_map(|io| io.to_meta()).collect();
         let Ok(segid) = replica_device.log_pending_io(pending, false).await else {
             state.set_logging_disable();
             let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region, state, inflight_dirty_regions);
@@ -316,6 +380,8 @@ impl<T> TgtPendingBlocksPool<T> {
             return false;
         };
         assert!(segid == 0);
+        #[cfg(feature="piopr")]
+        pool.borrow_mut().flush_queue.append(&mut v_iometa);
         pool.borrow_mut().inflight_bytes = 0;
         pool.borrow_mut().pending_bytes -= bytes;
         debug!("TgtPendingBlocksPool try log pending - {} bytes appended to replica cost {:?}", bytes, start.elapsed());

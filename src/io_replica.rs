@@ -789,12 +789,18 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     // create a task state tracker
     let task_state = TaskState::new();
     let (tx, main) = if replica.starts_with("s3://") || replica.starts_with("S3://") {
+        #[cfg(not(feature="piopr"))]
         let tgt = TgtPendingBlocksPool::<S3Replica>::new(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev, dev_id, g_seq.clone());
+        #[cfg(feature="piopr")]
+        let tgt = TgtPendingBlocksPool::<S3Replica>::new_with_piopr(pool_sz as usize, &replica, s3_replica_device.unwrap(), meta_dev, dev_id, g_seq.clone(), piopr.clone());
         let _tx = tgt.get_tx_chan();
         let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)
     } else {
+        #[cfg(not(feature="piopr"))]
         let tgt = TgtPendingBlocksPool::<FileReplica>::new(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev, dev_id, g_seq.clone());
+        #[cfg(feature="piopr")]
+        let tgt = TgtPendingBlocksPool::<FileReplica>::new_with_piopr(pool_sz as usize, &replica, file_replica_device.unwrap(), meta_dev, dev_id, g_seq.clone(), piopr.clone());
         let _tx = tgt.get_tx_chan();
         let _main = TaskManager::start(tgt, unix_sock, tgt_state.clone(), g_region.clone(), g_recover_ctrl.clone(), task_state.clone());
         (_tx, _main)

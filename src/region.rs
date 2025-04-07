@@ -321,7 +321,7 @@ impl PersistRegionMap {
     }
 
     fn mark_dirty_one(&self, region_id: u64) {
-        assert!(region_id < self.size * 8); // assume region id not exceed persist map space
+        assert!(region_id <= self.size * 8); // assume region id not exceed persist map space
         let grp_idx = region_id / 64;
         let bit_idx = region_id % 64;
 
@@ -495,10 +495,10 @@ impl PendingIoPersistRegionMap {
     }
 
     // call in flush context only
-    pub(crate) fn dec_pending(&self, v: Vec<crate::pool::PendingIo>) -> Result<()> {
+    pub(crate) fn dec_pending(&self, v: Vec<crate::pool::PendingIoMeta>) -> Result<()> {
         let _lock = self.mutex.lock_blocking();
         for io in v.into_iter() {
-            let region_id = Region::to_region_id(io.offset(), io.size() as u64, self.region_shift);
+            let region_id = Region::to_region_id(io.offset, io.size as u64, self.region_shift);
             let old_val = self.map[region_id as usize].pending.fetch_sub(2, Ordering::SeqCst);
             if old_val == 2 {
                 self.dirty_count.fetch_sub(1, Ordering::SeqCst);
