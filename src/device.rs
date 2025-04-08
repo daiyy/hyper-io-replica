@@ -262,6 +262,11 @@ impl MetaDevice {
         self.preg.load()
     }
 
+    #[cfg(feature="piopr")]
+    pub fn preg2_load(&self) -> Vec<u64> {
+        self.preg2.load()
+    }
+
     #[allow(dead_code)]
     pub async fn preg_mark_dirty(&self, region_id: u64) -> Result<()> {
         self.preg.mark_dirty(region_id).await
