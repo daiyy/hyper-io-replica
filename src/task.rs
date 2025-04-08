@@ -271,8 +271,16 @@ impl<T: Replica + 'static> TaskManager<T> {
             warn!("TaskManager - before exit - dirty region {:?}", dirty_region);
         }
 
+        if cfg!(feature = "piopr") {
+            debug!("TaskManager - before exit - piopr");
+            debug!("{}", pool.borrow().piopr);
+        }
+
         // close preg
         let _ = pool.borrow_mut().meta_dev.preg.close().await;
+        if cfg!(feature = "piopr") {
+            let _ = pool.borrow_mut().meta_dev.preg2.close().await;
+        }
         // finally close superblock
         let _ = pool.borrow_mut().meta_dev.sb_close_sync().await;
 
