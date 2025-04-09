@@ -297,17 +297,13 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
                         error!("primary io failed with io error: {res}");
                         return res;
                     }
+                    #[cfg(feature="piopr")]
+                    if region::local_piopr_persist_pending_consist(&iod, is_flipped).is_err() {
+                        return -libc::EIO;
+                    }
                     if state::local_state_logging_enabled() {
-                        #[cfg(feature="piopr")]
-                        if region::local_piopr_persist_pending_consist(&iod, is_flipped).is_err() {
-                            return -libc::EIO;
-                        }
                         pool_append_pending(&iod, seq.next(iod.op_flags), false);
                     } else {
-                        #[cfg(feature="piopr")]
-                        if region::local_piopr_persist_pending_consist(&iod, is_flipped).is_err() {
-                            return -libc::EIO;
-                        }
                         region::local_region_mark_dirty(&iod);
                     }
                 },
@@ -759,6 +755,15 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     for region_id in v_dirty_regions.into_iter() {
         g_region.mark_dirty_region_id(region_id);
     }
+
+    if cfg!(feature = "piopr") {
+        let v_dirty_regions2 = meta_dev.preg_load();
+        if v_dirty_regions2.len() > 0 {
+            warn!("loading persist region2 from meta device {:?}", v_dirty_regions2);
+        }
+    }
+    // TODO
+    // check and recover dity regions in persist region area
 
     let g_recover_ctrl = recover::RecoverCtrl::default()
         .with_region_size(g_region.region_size())
