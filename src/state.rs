@@ -12,6 +12,7 @@ pub(crate) const TGT_STATE_RECOVERY_FORWARD_FULL: u64 = 0b0001_0000;
 pub(crate) const TGT_STATE_RECOVERY_FORWARD_PART: u64 = 0b0010_0000;
 pub(crate) const TGT_STATE_RECOVERY_FORWARD_PART2: u64 = 0b0100_0000; // stage 2: loop for dirty again regions
 pub(crate) const TGT_STATE_RECOVERY_FORWARD_FINAL: u64 = 0b1000_0000; // final stage: wait on region clean
+pub(crate) const TGT_STATE_RECOVERY_MASK: u64 = 0b1111_1110;
 
 pub(crate) struct LocalTgtState {
     inner: u64,     // local copy of tgt state
