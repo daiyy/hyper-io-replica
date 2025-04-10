@@ -13,6 +13,7 @@ use smol::fs::{OpenOptions, unix::OpenOptionsExt};
 use smol::io::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 use libublk::sys::ublksrv_io_desc;
 use serde_repr::*;
+use log::debug;
 use crate::state::GlobalTgtState;
 use crate::state;
 use crate::region;
@@ -596,12 +597,14 @@ impl RecoverCtrl {
         // time to check if we have region dirty again during the whole recover process
         let dirty_count = lock.len();
         if dirty_count > DEFAULT_FORWARD_FINAL_TRANSITION_THRESHOLD {
+            debug!("RecoverCtrl - state transition to FORWARD PART - dirty region count {} > {}", dirty_count, DEFAULT_FORWARD_FINAL_TRANSITION_THRESHOLD);
             // too much dirty regions start over forward part again
             let v_region_dirty_again: Vec<u64> = lock.drain().into_iter().collect();
             self.rebuild_mode_forward_part(g_region.clone(), v_region_dirty_again);
             self.kickoff();
             return;
         } else if dirty_count == 0 {
+            debug!("RecoverCtrl - state transition to DONE");
             // all regions recovered, clear recover state bits
             let mut mode_lock = self.mode.write_arc().await;
             let state = self.g_state.clear_all_recover_bits();
@@ -609,6 +612,7 @@ impl RecoverCtrl {
             *mode_lock = state;
             return;
         }
+        debug!("RecoverCtrl - state transition to FORWARD FINAL - dirty region count {}", dirty_count);
         // transition to forward_final staging
         let v_region_dirty_again: Vec<u64> = lock.drain().into_iter().collect();
         self.rebuild_mode_forward_final(g_region.clone(), v_region_dirty_again);
@@ -633,7 +637,10 @@ impl RecoverCtrl {
         let sema = Arc::new(Semaphore::new(self.concurrency.load(Ordering::SeqCst)));
         let region_size = self.region_size;
         loop {
-            let guard = sema.acquire_arc().await;
+            let Some(guard) = sema.try_acquire_arc() else {
+                exec.tick().await;
+                continue;
+            };
             // break recover process if received cmd is false or channel closed
             match self.rx.try_recv() {
                 Ok(cmd) => { if !cmd { return; } },
@@ -657,6 +664,10 @@ impl RecoverCtrl {
             } else {
                 break;
             }
+        }
+
+        while !exec.is_empty() {
+            exec.tick().await;
         }
 
         // nothing left in recover queue now, let's wait for all region finished
