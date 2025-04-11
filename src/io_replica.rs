@@ -242,13 +242,10 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
     #[cfg(feature="piopr")]
     let op = iod.op_flags & 0xff;
     #[cfg(feature="piopr")]
-    let is_flipped = if state::local_state_logging_enabled() &&
-            (
-                op == libublk::sys::UBLK_IO_OP_WRITE ||
+    let is_flipped = if op == libublk::sys::UBLK_IO_OP_WRITE ||
                 op == libublk::sys::UBLK_IO_OP_WRITE_SAME ||
                 op == libublk::sys::UBLK_IO_OP_DISCARD ||
                 op == libublk::sys::UBLK_IO_OP_WRITE_ZEROES
-            )
     {
         match region::local_piopr_persist_pending_staging(&iod) {
             Ok(flipped) => flipped,
