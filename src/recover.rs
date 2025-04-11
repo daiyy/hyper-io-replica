@@ -607,8 +607,9 @@ impl RecoverCtrl {
             debug!("RecoverCtrl - state transition to DONE");
             // all regions recovered, clear recover state bits
             let mut mode_lock = self.mode.write_arc().await;
+            #[cfg(feature="piopr")]
+            let _ = pool.borrow_mut().piopr.clear().await;
             let state = self.g_state.clear_all_recover_bits();
-            let _ = pool.borrow().meta_dev.preg_clear_all().await;
             *mode_lock = state;
             return;
         }

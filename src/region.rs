@@ -539,6 +539,17 @@ impl PendingIoPersistRegionMap {
         }
         Ok(())
     }
+
+    // clear all
+    pub(crate) async fn clear(&self) -> Result<()> {
+        let _lock = self.mutex.lock_blocking();
+        for region_id in 0..self.nr_regions {
+            let pending_count = self.map[region_id as usize].pending.store(0, Ordering::SeqCst);
+        }
+        self.prmap_staging.clear_all().await?;
+        self.prmap_consist.clear_all().await?;
+        Ok(())
+    }
 }
 
 #[cfg(feature="piopr")]
