@@ -627,7 +627,7 @@ impl RecoverCtrl {
         let mode = self.mode.read_arc().await;
         let forward = if *mode == state::TGT_STATE_RECOVERY_REVERSE_FULL {
             false
-        } else if *mode == state::TGT_STATE_RECOVERY_FORWARD_FULL || *mode == state::TGT_STATE_RECOVERY_FORWARD_PART {
+        } else if *mode == state::TGT_STATE_RECOVERY_FORWARD_FULL || *mode == state::TGT_STATE_RECOVERY_FORWARD_PART || *mode == state::TGT_STATE_RECOVERY_FORWARD_FINAL {
             true
         } else {
             panic!("unkown RecoverCtrl mode {} found during kickoff recover", *mode);
