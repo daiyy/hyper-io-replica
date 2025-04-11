@@ -603,7 +603,8 @@ impl RecoverCtrl {
             self.rebuild_mode_forward_part(g_region.clone(), v_region_dirty_again);
             self.kickoff();
             return;
-        } else if dirty_count == 0 {
+        } else if dirty_count == 0 && self.g_state.is_recovery_forward_final() {
+            // forward final to forward done transition
             debug!("RecoverCtrl - state transition to DONE");
             // all regions recovered, clear recover state bits
             let mut mode_lock = self.mode.write_arc().await;
