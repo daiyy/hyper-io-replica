@@ -550,6 +550,10 @@ impl<T> TgtPendingBlocksPool<T> {
             if pool.borrow().pending_bytes >= pool.borrow().max_capacity / 2 {
                 debug!("TgtPendingBlocksPool main task - {} of pending IO, total {} bytes exceed 1/2 max capacity {}",
                     pool.borrow().pending_queue.len(), pool.borrow().pending_bytes, pool.borrow().max_capacity);
+                let stats = pool.borrow().get_stats();
+                if stats.is_active() {
+                    debug!("TgtPendingBlocksPool main task - {}", stats);
+                }
 
                 // kick log pending
                 let _ = Self::try_log_pending(pool.clone(), &replica_device, region.clone(), state.clone()).await;
