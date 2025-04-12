@@ -825,15 +825,19 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     // mgmt client will block until mgmt backend received the command,
     // so it is safe that when client returned, process is kicked.
+    let dirty_region_count = g_region.collect().len();
     if primary_cno > replica_cno {
         let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
         client.forward_full();
+        info!("kick start up recover mode to FORWARD_FULL - primary cno: {primary_cno}, replica cno: {replica_cno}");
     } else if primary_cno < replica_cno {
         let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
         client.reverse_full();
-    } else if primary_cno == replica_cno {
+        info!("kick start up recover mode to REVERSE_FULL - primary cno: {primary_cno}, replica cno: {replica_cno}");
+    } else if primary_cno == replica_cno && dirty_region_count > 0 {
         let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
         client.forward_part();
+        info!("kick start up recover mode to FORWARD_PART - primary cno: {primary_cno}, replica cno: {replica_cno}");
     }
 
     ctrl.run_target(
