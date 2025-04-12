@@ -365,6 +365,8 @@ impl<T> TgtPendingBlocksPool<T> {
         let start = std::time::Instant::now();
         #[cfg(feature="piopr")]
         let mut v_iometa: Vec<PendingIoMeta> = pending.iter().filter_map(|io| io.to_meta()).collect();
+        #[cfg(feature="piopr")]
+        debug!("TgtPendingBlocksPool try log pending - convert pending io to io meta cost: {:?}", start.elapsed());
         let Ok(segid) = replica_device.log_pending_io(pending, false).await else {
             state.set_logging_disable();
             let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region, state, inflight_dirty_regions);
@@ -376,6 +378,7 @@ impl<T> TgtPendingBlocksPool<T> {
             Self::pool_clear_all_pending(pool.clone());
             return false;
         };
+        debug!("TgtPendingBlocksPool try log pending - log pending io to replica device cost: {:?}", start.elapsed());
         assert!(segid == 0);
         #[cfg(feature="piopr")]
         pool.borrow_mut().flush_queue.append(&mut v_iometa);
