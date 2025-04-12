@@ -90,13 +90,13 @@ pub struct MetaDeviceDesc {
 
 impl fmt::Display for MetaDeviceDesc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if cfg!(feature="piopr") {
-            write!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, region_map_offset: {}, region_map2_offset: {}, region_map_size {}, sb_offset: {}}}",
-                self.device_path, self.offset, self.size, self.region_map_offset, self.region_map2_offset, self.region_map_size, self.sb_offset)
-        } else {
-            write!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, region_map_offset: {}, region_map_size {}, sb_offset: {}}}",
-                self.device_path, self.offset, self.size, self.region_map_offset, self.region_map_size, self.sb_offset)
-        }
+        #[cfg(feature="piopr")]
+        write!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, region_map_offset: {}, region_map2_offset: {}, region_map_size {}, sb_offset: {}}}",
+            self.device_path, self.offset, self.size, self.region_map_offset, self.region_map2_offset, self.region_map_size, self.sb_offset)?;
+        #[cfg(not(feature="piopr"))]
+        write!(f, "MetaDeviceDesc {{device_path: {}, offset: {}, size: {}, region_map_offset: {}, region_map_size {}, sb_offset: {}}}",
+            self.device_path, self.offset, self.size, self.region_map_offset, self.region_map_size, self.sb_offset)?;
+        Ok(())
     }
 }
 
@@ -125,6 +125,7 @@ pub struct MetaDevice {
     pub flush_log: FlushLog,
     pub sb: SuperBlock,
     pub preg: PersistRegionMap,
+    #[cfg(feature="piopr")]
     pub preg2: PersistRegionMap,
 }
 
@@ -165,6 +166,7 @@ impl MetaDevice {
             flush_log: FlushLog::from(&fl_raw),
             sb: SuperBlock::from(&sb_raw),
             preg: preg,
+            #[cfg(feature="piopr")]
             preg2: preg2,
         }
     }
@@ -189,10 +191,9 @@ impl MetaDevice {
         sb_raw.reserved_size = desc.size;
         sb_raw.metadata_offset = desc.offset;
         sb_raw.persist_region_map_offset = desc.region_map_offset;
-        if cfg!(feature="piopr") {
+        sb_raw.persist_region_map2_offset = 0;
+        #[cfg(feature="piopr")] {
             sb_raw.persist_region_map2_offset = desc.region_map2_offset;
-        } else {
-            sb_raw.persist_region_map2_offset = 0;
         }
         sb_raw.persist_region_map_size = desc.region_map_size;
         sb_raw.replica_dev_uuid = replica_uuid.to_owned();
@@ -209,7 +210,9 @@ impl MetaDevice {
         let _ = file.seek(SeekFrom::Start(desc.region_map_offset)).await;
         let res = file.write(&zero).await;
         info!("flush persist region map res: {:?}", res);
-        if cfg!(feature="piopr") {
+
+        #[cfg(feature="piopr")]
+        {
             info!("format persist region map2 at {}", desc.region_map2_offset);
             let _ = file.seek(SeekFrom::Start(desc.region_map2_offset)).await;
             let res = file.write(&zero).await;

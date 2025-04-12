@@ -3,12 +3,13 @@ use std::io::Result;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::collections::HashSet;
+use log::debug;
+#[cfg(feature="piopr")]
+use log::{trace, error};
 use libublk::sys::ublksrv_io_desc;
 use crate::io_replica::{LOCAL_DIRTY_REGION, LOCAL_REGION_MAP, LOCAL_REGION_SHIFT};
 #[cfg(feature="piopr")]
 use crate::io_replica::LOCAL_PIO_PREGION;
-#[cfg(feature="piopr")]
-use log::{trace, debug, error};
 
 #[derive(Clone)]
 pub struct Region {
