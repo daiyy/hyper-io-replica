@@ -329,9 +329,6 @@ impl<T> TgtPendingBlocksPool<T> {
     }
 
     fn pool_clear_all_pending(pool: Rc<RefCell<Self>>) {
-        assert!(pool.borrow().staging_data_queue.len() == 0);
-        assert!(pool.borrow().staging_seq_queue.len() == 0);
-        assert!(pool.borrow().pending_queue.len() == 0);
         // cleanup queue in pool
         pool.borrow_mut().inflight_bytes = 0;
         pool.borrow_mut().staging_data_queue.clear();
