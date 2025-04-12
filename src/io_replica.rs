@@ -745,22 +745,31 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     let piopr = Arc::new(region::PendingIoPersistRegionMap::new(lo.device_size, region_sz, meta_dev.preg.clone(), meta_dev.preg2.clone()));
 
     // load and fill in-memory region tracker with persist region
-    let v_dirty_regions = meta_dev.preg_load();
+    let mut v_dirty_regions = meta_dev.preg_load();
     if v_dirty_regions.len() > 0 {
         warn!("loading persist region from meta device {:?}", v_dirty_regions);
+    }
+    #[cfg(feature="piopr")] {
+        let mut v_dirty_regions2 = meta_dev.preg2_load();
+        if v_dirty_regions2.len() > 0 {
+            warn!("loading persist region2 from meta device {:?}", v_dirty_regions2);
+        }
+        // merge all dirty regions in piopr
+        v_dirty_regions.append(&mut v_dirty_regions2);
+        v_dirty_regions.dedup();
+        v_dirty_regions.sort();
+    }
+    if v_dirty_regions.len() > 0 {
+        warn!("{} of dirty regions detected on persist area", v_dirty_regions.len());
+        if !force_startup_recover {
+            warn!(" force_startup_recover is {force_startup_recover}, exit.");
+            return Ok(-libc::EINVAL);
+        }
+        warn!(" starting recovery process ...");
     }
     for region_id in v_dirty_regions.into_iter() {
         g_region.mark_dirty_region_id(region_id);
     }
-
-    if cfg!(feature = "piopr") {
-        let v_dirty_regions2 = meta_dev.preg_load();
-        if v_dirty_regions2.len() > 0 {
-            warn!("loading persist region2 from meta device {:?}", v_dirty_regions2);
-        }
-    }
-    // TODO
-    // check and recover dity regions in persist region area
 
     let g_recover_ctrl = recover::RecoverCtrl::default()
         .with_region_size(g_region.region_size())
@@ -822,6 +831,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
     } else if primary_cno < replica_cno {
         let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
         client.reverse_full();
+    } else if primary_cno == replica_cno {
+        let mut client = MgmtClient::new(&sock_path).expect("failed to create mgmt client for shutdown handler");
+        client.forward_part();
     }
 
     ctrl.run_target(
