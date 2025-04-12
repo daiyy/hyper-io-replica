@@ -611,6 +611,8 @@ impl RecoverCtrl {
             #[cfg(feature="piopr")]
             let _ = pool.borrow_mut().piopr.clear().await;
             let state = self.g_state.clear_all_recover_bits();
+            // enable logging
+            self.g_state.set_logging_enable();
             *mode_lock = state;
             return;
         }
