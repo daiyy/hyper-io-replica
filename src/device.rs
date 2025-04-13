@@ -279,6 +279,7 @@ impl MetaDevice {
         self.preg.mark_dirty_batch(regions).await
     }
 
+    #[allow(dead_code)]
     pub async fn preg_clear_all(&self) -> Result<()> {
         self.preg.clear_all().await
     }

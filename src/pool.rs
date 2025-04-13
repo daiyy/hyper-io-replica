@@ -19,9 +19,11 @@ use crate::stats::PoolStats;
 
 #[cfg(feature="piopr")]
 pub(crate) struct PendingIoMeta {
+    #[allow(dead_code)]
     pub(crate) flags: u32,
     pub(crate) size: u32,
     pub(crate) offset: u64,
+    #[allow(dead_code)]
     pub(crate) seq: u64,
 }
 
@@ -133,7 +135,7 @@ impl PendingIo {
                     seq: io.seq,
                 });
             },
-            Self::Flush(io) => {
+            Self::Flush(_io) => {
                 return None;
             },
         }

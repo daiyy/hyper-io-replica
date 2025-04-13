@@ -36,16 +36,20 @@ pub(crate) enum RecoverState {
     Dirty       = 3, // new write after synced
 }
 
+#[allow(dead_code)]
 const MIN_ALIGNED: usize = 4096;
 
+#[allow(dead_code)]
 pub(crate) struct Region {
     pub(crate) state: RecoverState,
     ptr: *mut u8, // buffer ptr for region in memory data mirror
     size: usize,  // size of region
 }
 
+#[allow(dead_code)]
 unsafe impl Send for Region {}
 
+#[allow(dead_code)]
 impl Region {
     fn new(state: RecoverState) -> Self {
         Self { state: state, ptr: std::ptr::null_mut(), size: 0 }
@@ -88,7 +92,7 @@ impl Region {
         let buf: &mut [u8] = unsafe {
             std::slice::from_raw_parts_mut(self.ptr, self.size)
         };
-        let mut chunk = &mut buf[offset..offset+p_size];
+        let chunk = &mut buf[offset..offset+p_size];
         chunk.copy_from_slice(io.as_ref());
     }
 }

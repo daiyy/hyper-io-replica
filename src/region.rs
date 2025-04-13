@@ -545,7 +545,7 @@ impl PendingIoPersistRegionMap {
     pub(crate) async fn clear(&self) -> Result<()> {
         let _lock = self.mutex.lock_blocking();
         for region_id in 0..self.nr_regions {
-            let pending_count = self.map[region_id as usize].pending.store(0, Ordering::SeqCst);
+            let _pending_count = self.map[region_id as usize].pending.store(0, Ordering::SeqCst);
         }
         self.prmap_staging.clear_all().await?;
         self.prmap_consist.clear_all().await?;
@@ -553,6 +553,7 @@ impl PendingIoPersistRegionMap {
     }
 }
 
+#[allow(dead_code)]
 #[cfg(feature="piopr")]
 #[inline]
 pub(crate) fn local_piopr_persist_region_staging(region: u64) -> Result<bool> {
@@ -561,6 +562,7 @@ pub(crate) fn local_piopr_persist_region_staging(region: u64) -> Result<bool> {
     })
 }
 
+#[allow(dead_code)]
 #[cfg(feature="piopr")]
 #[inline]
 pub(crate) fn local_piopr_persist_region_consist(region: u64, is_flipped: bool) -> Result<()> {
