@@ -10,7 +10,6 @@ pub(crate) const TGT_STATE_LOGGING_ENABLED: u64 = 0b0001;
 pub(crate) const TGT_STATE_RECOVERY_REVERSE_FULL: u64 = 0b0010;
 pub(crate) const TGT_STATE_RECOVERY_FORWARD_FULL: u64 = 0b0001_0000;
 pub(crate) const TGT_STATE_RECOVERY_FORWARD_PART: u64 = 0b0010_0000;
-pub(crate) const TGT_STATE_RECOVERY_FORWARD_PART2: u64 = 0b0100_0000; // stage 2: loop for dirty again regions
 pub(crate) const TGT_STATE_RECOVERY_FORWARD_FINAL: u64 = 0b1000_0000; // final stage: wait on region clean
 pub(crate) const TGT_STATE_RECOVERY_MASK: u64 = 0b1111_1110;
 
@@ -81,17 +80,13 @@ impl LocalTgtState {
         self.inner & TGT_STATE_RECOVERY_FORWARD_PART == TGT_STATE_RECOVERY_FORWARD_PART
     }
 
-    pub(crate) fn is_recovery_forward_part2(&self) -> bool {
-        self.inner & TGT_STATE_RECOVERY_FORWARD_PART2 == TGT_STATE_RECOVERY_FORWARD_PART2
-    }
-
     pub(crate) fn is_recovery_forward_final(&self) -> bool {
         self.inner & TGT_STATE_RECOVERY_FORWARD_FINAL == TGT_STATE_RECOVERY_FORWARD_FINAL
     }
 
     pub(crate) fn is_recovery(&self) -> bool {
         let recovery_state = TGT_STATE_RECOVERY_FORWARD_FULL | TGT_STATE_RECOVERY_FORWARD_PART |
-            TGT_STATE_RECOVERY_FORWARD_PART2 | TGT_STATE_RECOVERY_FORWARD_FINAL | TGT_STATE_RECOVERY_REVERSE_FULL;
+            TGT_STATE_RECOVERY_FORWARD_FINAL | TGT_STATE_RECOVERY_REVERSE_FULL;
         self.inner & recovery_state > 0
     }
 }
@@ -108,7 +103,6 @@ impl fmt::Debug for GlobalTgtState {
         let recovery_reverse_full = state & TGT_STATE_RECOVERY_REVERSE_FULL == TGT_STATE_RECOVERY_REVERSE_FULL;
         let recovery_forward_full = state & TGT_STATE_RECOVERY_FORWARD_FULL == TGT_STATE_RECOVERY_FORWARD_FULL;
         let recovery_forward_part = state & TGT_STATE_RECOVERY_FORWARD_PART == TGT_STATE_RECOVERY_FORWARD_PART;
-        let recovery_forward_part2 = state & TGT_STATE_RECOVERY_FORWARD_PART2 == TGT_STATE_RECOVERY_FORWARD_PART2;
         let recovery_forward_final = state & TGT_STATE_RECOVERY_FORWARD_FINAL == TGT_STATE_RECOVERY_FORWARD_FINAL;
         let mut msg = Vec::new();
         if logging_enabled {
@@ -166,11 +160,6 @@ impl GlobalTgtState {
         let _ = self.inner.fetch_or(state, Ordering::SeqCst);
     }
 
-    pub(crate) fn set_recovery_forward_part2(&self) {
-        let state = TGT_STATE_RECOVERY_FORWARD_PART2;
-        let _ = self.inner.fetch_or(state, Ordering::SeqCst);
-    }
-
     pub(crate) fn set_recovery_forward_final(&self) {
         let state = TGT_STATE_RECOVERY_FORWARD_FINAL;
         let _ = self.inner.fetch_or(state, Ordering::SeqCst);
@@ -178,7 +167,7 @@ impl GlobalTgtState {
 
     pub(crate) fn clear_all_recover_bits(&self) -> u64 {
         let state = !(TGT_STATE_RECOVERY_FORWARD_FULL | TGT_STATE_RECOVERY_FORWARD_PART |
-            TGT_STATE_RECOVERY_FORWARD_PART2 | TGT_STATE_RECOVERY_FORWARD_FINAL | TGT_STATE_RECOVERY_REVERSE_FULL);
+            TGT_STATE_RECOVERY_FORWARD_FINAL | TGT_STATE_RECOVERY_REVERSE_FULL);
         let _ = self.inner.fetch_and(state, Ordering::SeqCst);
         self.inner.load(Ordering::SeqCst)
     }
@@ -189,7 +178,7 @@ impl GlobalTgtState {
 
     pub(crate) fn is_recovery(&self) -> bool {
         let recovery_state = TGT_STATE_RECOVERY_FORWARD_FULL | TGT_STATE_RECOVERY_FORWARD_PART |
-            TGT_STATE_RECOVERY_FORWARD_PART2 | TGT_STATE_RECOVERY_FORWARD_FINAL | TGT_STATE_RECOVERY_REVERSE_FULL;
+            TGT_STATE_RECOVERY_FORWARD_FINAL | TGT_STATE_RECOVERY_REVERSE_FULL;
         self.inner.load(Ordering::SeqCst) & recovery_state > 0
     }
 
