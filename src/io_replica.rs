@@ -735,6 +735,9 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     let tgt_state = GlobalTgtState::new();
     let g_state = tgt_state.state_clone();
+    smol::block_on(async {
+        meta_dev.sb_state_sync(tgt_state.get_raw()).await;
+    });
 
     let g_region = region::Region::new(lo.device_size, region_sz);
 
