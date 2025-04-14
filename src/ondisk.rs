@@ -15,9 +15,11 @@ pub struct SuperBlockRaw {
     pub creation_timestamp: u64,
     pub startup_timestamp: u64,
     pub shutdown_timestamp: u64, // timestamp is 0 means not a clean shutdown
+    pub state_timestamp: u64,
+    pub last_state: u64,
     pub last_cno: u64,
     pub replica_dev_uuid: [u8; 16],
-    padding: [u64; 50],
+    padding: [u64; 48],
 }
 
 impl fmt::Display for SuperBlockRaw {
@@ -38,6 +40,7 @@ impl fmt::Display for SuperBlockRaw {
         let create = time::OffsetDateTime::from_unix_timestamp(self.creation_timestamp as i64).unwrap();
         let startup = time::OffsetDateTime::from_unix_timestamp(self.startup_timestamp as i64).unwrap();
         let shutdown = time::OffsetDateTime::from_unix_timestamp(self.shutdown_timestamp as i64).unwrap();
+        let state = time::OffsetDateTime::from_unix_timestamp(self.state_timestamp as i64).unwrap();
 
         writeln!(f, "  magic: {}, replica: {}", &magic, replica_uuid)?;
         writeln!(f, "  checksum: {:x}, last cno: {}", self.checksum, self.last_cno)?;
@@ -45,6 +48,7 @@ impl fmt::Display for SuperBlockRaw {
             self.allocated_size, self.reserved_size, self.metadata_offset)?;
         writeln!(f, "  persist region map offset: {}, map2 offset: {}, map size: {}",
             self.persist_region_map_offset, self.persist_region_map2_offset, self.persist_region_map_size)?;
+        writeln!(f, "  last state: {}, state time: {}", self.last_state, state.format(&Rfc3339).unwrap())?;
         write!(f, "  creation_time: {}, startup_time: {}, shutdown_time: {}",
             create.format(&Rfc3339).unwrap(),
             startup.format(&Rfc3339).unwrap(),
@@ -66,9 +70,11 @@ impl Default for SuperBlockRaw {
             creation_timestamp: 0,
             startup_timestamp: 0,
             shutdown_timestamp: 0,
+            state_timestamp: 0,
+            last_state: 0,
             last_cno: 0,
             replica_dev_uuid: [0u8; 16],
-            padding: [0u64; 50],
+            padding: [0u64; 48],
         }
     }
 }

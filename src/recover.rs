@@ -618,6 +618,7 @@ impl RecoverCtrl {
             // enable logging
             self.g_state.set_logging_enable();
             *mode_lock = state;
+            pool.borrow_mut().meta_dev.sb_state_sync(state).await;
             return;
         }
         debug!("RecoverCtrl - state transition to FORWARD FINAL - dirty region count {}", dirty_count);
@@ -640,6 +641,7 @@ impl RecoverCtrl {
         } else {
             panic!("unkown RecoverCtrl mode {} found during kickoff recover", *mode);
         };
+        pool.borrow_mut().meta_dev.sb_state_sync(*mode).await;
         drop(mode);
 
         let sema = Arc::new(Semaphore::new(self.concurrency.load(Ordering::SeqCst)));

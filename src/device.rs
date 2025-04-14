@@ -261,6 +261,18 @@ impl MetaDevice {
         let _ = self.file.write_all(self.sb.raw.as_u8_slice()).await;
     }
 
+    pub async fn sb_state_sync(&mut self, state: u64) {
+        self.sb.raw.last_state = state;
+
+        let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+        self.sb.raw.state_timestamp = now;
+        let _ = self.file.seek(SeekFrom::Start(self.desc.sb_offset)).await;
+        let _ = self.file.write_all(self.sb.raw.as_u8_slice()).await;
+    }
+
     pub fn preg_load(&self) -> Vec<u64> {
         self.preg.load()
     }
