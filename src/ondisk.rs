@@ -48,7 +48,7 @@ impl fmt::Display for SuperBlockRaw {
             self.allocated_size, self.reserved_size, self.metadata_offset)?;
         writeln!(f, "  persist region map offset: {}, map2 offset: {}, map size: {}",
             self.persist_region_map_offset, self.persist_region_map2_offset, self.persist_region_map_size)?;
-        writeln!(f, "  last state: {}, state time: {}", self.last_state, state.format(&Rfc3339).unwrap())?;
+        writeln!(f, "  last state: {}, state time: {}", crate::state::tgt_state_to_string(self.last_state), state.format(&Rfc3339).unwrap())?;
         write!(f, "  creation_time: {}, startup_time: {}, shutdown_time: {}",
             create.format(&Rfc3339).unwrap(),
             startup.format(&Rfc3339).unwrap(),

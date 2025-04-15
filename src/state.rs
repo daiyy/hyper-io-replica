@@ -13,6 +13,23 @@ pub(crate) const TGT_STATE_RECOVERY_FORWARD_PART: u64 = 0b0010_0000;
 pub(crate) const TGT_STATE_RECOVERY_FORWARD_FINAL: u64 = 0b1000_0000; // final stage: wait on region clean
 pub(crate) const TGT_STATE_RECOVERY_MASK: u64 = 0b1111_1110;
 
+pub(crate) fn tgt_state_to_string(state: u64) -> String {
+	let logging = state & TGT_STATE_LOGGING_ENABLED == TGT_STATE_LOGGING_ENABLED;
+	let reverse_full = state & TGT_STATE_RECOVERY_REVERSE_FULL == TGT_STATE_RECOVERY_REVERSE_FULL;
+	let forward_full = state & TGT_STATE_RECOVERY_FORWARD_FULL == TGT_STATE_RECOVERY_FORWARD_FULL;
+	let forward_part = state & TGT_STATE_RECOVERY_FORWARD_PART == TGT_STATE_RECOVERY_FORWARD_PART;
+	let forward_final = state & TGT_STATE_RECOVERY_FORWARD_FINAL == TGT_STATE_RECOVERY_FORWARD_FINAL;
+
+	let mut v = Vec::new();
+	if logging { v.push("LoggingEnabled".to_string()); } else { v.push("LoggingDisabled".to_string()); }
+	if reverse_full { v.push("RecoverReverseFull".to_string()); }
+	if forward_full { v.push("RecoverForwardFull".to_string()); }
+	if forward_part { v.push("RecoverForwardPart".to_string()); }
+	if forward_final { v.push("RecoverForwardFinal".to_string()); }
+
+	v.join(" | ")
+}
+
 pub(crate) struct LocalTgtState {
     inner: u64,     // local copy of tgt state
     changed: bool,  // if local state changed
@@ -187,6 +204,10 @@ impl GlobalTgtState {
 
     pub(crate) fn is_not_recovery_and_logging_enabled(&self) -> bool {
         self.inner.load(Ordering::SeqCst) == TGT_STATE_LOGGING_ENABLED
+    }
+
+    pub(crate) fn get_raw(&self) -> u64 {
+        self.inner.load(Ordering::SeqCst)
     }
 }
 
