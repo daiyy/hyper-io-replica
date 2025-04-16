@@ -24,4 +24,8 @@ impl IncrSeq {
     pub(crate) fn get(&self) -> u64 {
         self.inner.load(Ordering::SeqCst)
     }
+
+    pub(crate) fn reset(&self) {
+        self.inner.store(1, Ordering::SeqCst)
+    }
 }

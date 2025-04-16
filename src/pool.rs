@@ -299,6 +299,11 @@ impl<T> TgtPendingBlocksPool<T> {
         self.inflight_bytes > 0
     }
 
+    pub(crate) fn reset_seq(&mut self) {
+        self.l_seq = 1;
+        self.g_seq.reset();
+    }
+
     // to handler all cases that pending io should log as dirty region
     // as result
     // all pending ios in staging_data_queue/staging_seq_queue/pending_queue marked as dirty reion
@@ -378,6 +383,7 @@ impl<T> TgtPendingBlocksPool<T> {
                 // TODO: handle meta device failed case
             }
             Self::pool_clear_all_pending(pool.clone());
+            pool.borrow_mut().reset_seq();
             return false;
         };
         debug!("TgtPendingBlocksPool try log pending - log pending io to replica device cost: {:?}", start.elapsed());
@@ -508,6 +514,7 @@ impl<T> TgtPendingBlocksPool<T> {
                     // TODO: handle meta device failed case
                 }
                 Self::pool_clear_all_pending(pool.clone());
+                pool.borrow_mut().reset_seq();
                 continue;
             }
 
@@ -524,6 +531,7 @@ impl<T> TgtPendingBlocksPool<T> {
                     // TODO: handle meta device failed case
                 }
                 Self::pool_clear_all_pending(pool.clone());
+                pool.borrow_mut().reset_seq();
                 continue;
             }
 
