@@ -686,6 +686,15 @@ impl RecoverCtrl {
             continue;
         }
         assert!(self.get_inflight() == 0 && self.get_pending() == 0);
+        if !forward {
+            // if reverse mode
+            // all regions recovered, clear recover state bits
+            let mut mode_lock = self.mode.write_arc().await;
+            let state = self.g_state.clear_all_recover_bits();
+            *mode_lock = state;
+            debug!("RecoverCtrl - state transition from REVERSE FULL to DONE");
+            return;
+        }
         self.do_state_transition(pool, g_region).await;
     }
 
