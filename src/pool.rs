@@ -375,6 +375,7 @@ impl<T> TgtPendingBlocksPool<T> {
         #[cfg(feature="piopr")]
         debug!("TgtPendingBlocksPool try log pending - convert pending io to io meta cost: {:?}", start.elapsed());
         let Ok(segid) = replica_device.log_pending_io(pending, false).await else {
+            debug!("TgtPendingBlocksPool try log pending - log pending io failed, disable logging");
             state.set_logging_disable();
             let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region, state, inflight_dirty_regions);
             let res = pool.borrow().meta_dev.preg_mark_dirty_batch(dirty_regions).await;
