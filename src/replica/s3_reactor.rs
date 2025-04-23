@@ -24,8 +24,9 @@ pub struct S3Replica<'a> {
 impl<'a: 'static> S3Replica<'a> {
     pub fn init(dev_path: &str) -> Self {
         if let Ok(s3uri) = S3Uri::parse(dev_path) {
+            // a tokio mt runtime, the place spawn_read/spawn_write of hyperfile task will run
             let rt = Arc::new(
-                runtime::Builder::new_current_thread()
+                runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
                     .unwrap()
