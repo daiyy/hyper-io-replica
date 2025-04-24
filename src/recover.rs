@@ -515,7 +515,7 @@ impl RecoverCtrl {
         }
         // in both forward and reverse mode, write io will be blocked
         let r = self.lookup(region_id).await;
-        let region = r.lock().await;
+        let mut region = r.lock().await;
         let state = region.state;
         match state {
             RecoverState::NoSync => {
@@ -529,6 +529,8 @@ impl RecoverCtrl {
                 Self::wait_on(r.clone()).await;
             },
             RecoverState::Clean => {
+                // mark this region dirty again
+                region.state = RecoverState::Dirty;
                 drop(region);
                 if !self.region_dirty_again.read().await.contains(&region_id) {
                     let _ = self.region_dirty_again.write().await.insert(region_id);
