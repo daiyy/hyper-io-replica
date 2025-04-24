@@ -225,6 +225,7 @@ pub(crate) fn local_state_logging_enabled() -> bool {
     })
 }
 
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn local_state_recovery_forward_full() -> bool {
     LOCAL_STATE.with(|state| {
@@ -232,6 +233,7 @@ pub(crate) fn local_state_recovery_forward_full() -> bool {
     })
 }
 
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn local_state_recovery_forward_part() -> bool {
     LOCAL_STATE.with(|state| {
@@ -239,6 +241,7 @@ pub(crate) fn local_state_recovery_forward_part() -> bool {
     })
 }
 
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn local_state_recovery_reverse_full() -> bool {
     LOCAL_STATE.with(|state| {

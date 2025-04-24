@@ -219,9 +219,7 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
         return res;
     }
 
-    if state::local_state_recovery_forward_part()
-            || state::local_state_recovery_forward_full()
-            || state::local_state_recovery_reverse_full()
+    if state::local_state_recovery()
     {
         let op = iod.op_flags & 0xff;
         match op {
