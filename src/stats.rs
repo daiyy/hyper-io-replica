@@ -87,9 +87,7 @@ impl<T> Stats<T> {
 
         // recover
         let (i, p, n) = self.global.recover.stat();
-        let mask = state::TGT_STATE_RECOVERY_FORWARD_FULL |
-            state::TGT_STATE_RECOVERY_FORWARD_PART |
-            state::TGT_STATE_RECOVERY_REVERSE_FULL;
+        let mask = state::TGT_STATE_RECOVERY_MASK;
         let map = if state & mask > 0 {
             self.global.recover.stat_region_map()
         } else {
