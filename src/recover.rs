@@ -586,6 +586,7 @@ impl RecoverCtrl {
             replica.read(offset, &mut buf).await?;
             primary_dev.seek(smol::io::SeekFrom::Start(offset)).await?;
             primary_dev.write_all(&buf).await?;
+            primary_dev.flush().await?;
         }
 
         let mut lock = region.lock().await;
