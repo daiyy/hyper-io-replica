@@ -489,14 +489,15 @@ impl RecoverCtrl {
         let r = self.lookup(region_id).await;
         let region = r.lock().await;
         let state = region.state;
-        drop(region);
         match state {
             RecoverState::NoSync => {
                 // trigger recover of this region in high priority
                 self.put_high_prio(region_id).await;
+                drop(region);
                 Self::wait_on(r.clone()).await;
             },
             RecoverState::Recovering => {
+                drop(region);
                 Self::wait_on(r.clone()).await;
             },
             _ => {
@@ -516,22 +517,25 @@ impl RecoverCtrl {
         let r = self.lookup(region_id).await;
         let region = r.lock().await;
         let state = region.state;
-        drop(region);
         match state {
             RecoverState::NoSync => {
                 // trigger recover of this region in high priority
                 self.put_high_prio(region_id).await;
+                drop(region);
                 Self::wait_on(r.clone()).await;
             },
             RecoverState::Recovering => {
+                drop(region);
                 Self::wait_on(r.clone()).await;
             },
             RecoverState::Clean => {
+                drop(region);
                 if !self.region_dirty_again.read().await.contains(&region_id) {
                     let _ = self.region_dirty_again.write().await.insert(region_id);
                 }
             },
-            _ => {
+            RecoverState::Dirty => {
+                drop(region);
             },
         };
         // handle RecoverState::Clean and RecoverState::Dirty
