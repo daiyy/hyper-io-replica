@@ -80,9 +80,9 @@ impl Command {
                                     format!("state set to {:?}", state)
                                 },
                                 4 => {
+                                    state.set_logging_disable();
                                     recover.rebuild_mode_reverse_full();
                                     recover.kickoff();
-                                    state.set_logging_enable();
                                     format!("state set to {:?}", state)
                                 },
                                 255 => {
