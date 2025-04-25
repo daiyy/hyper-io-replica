@@ -124,7 +124,7 @@ impl<T: Replica + 'static> TaskManager<T> {
     pub(crate) async fn periodic_replica_flush(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, task_state: TaskState) {
         // create a dedicate intance of replica deivce instance
         let replica_device = pool.borrow().replica_device.dup().await;
-        let entry_cno = pool.borrow().meta_dev.flush_log.last_entry().cno;
+        let entry_cno = pool.borrow().meta_dev.borrow().flush_log.last_entry().cno;
         let mut last_replica_ondisk_cno = replica_device.last_cno().await;
         let mut last_primary_metadata_cno = entry_cno;
         task_state.wait_on_tgt_pool_start().await;
@@ -139,7 +139,7 @@ impl<T: Replica + 'static> TaskManager<T> {
             if last_replica_ondisk_cno < cno && last_primary_metadata_cno < cno {
                 debug!("TgtPendingBlocksPool periodic task replica flush - done with segid: {}, cost: {:?}", cno, now.elapsed().unwrap());
                 // only sync log entry cno for an effective replica flush
-                let _ = pool.borrow_mut().meta_dev.flush_log_sync(cno).await;
+                let _ = pool.borrow().meta_dev.borrow_mut().flush_log_sync(cno).await;
                 last_primary_metadata_cno = cno;
                 last_replica_ondisk_cno = cno;
                 #[cfg(feature="piopr")] {
@@ -259,11 +259,11 @@ impl<T: Replica + 'static> TaskManager<T> {
         smol::future::yield_now().await;
 
         // open meta dev for last flush
-        let entry_cno = pool.borrow().meta_dev.flush_log.last_entry().cno;
+        let entry_cno = pool.borrow().meta_dev.borrow().flush_log.last_entry().cno;
         let last_primary_metadata_cno = entry_cno;
         let cno = replica.close().await?;
         if  last_primary_metadata_cno < cno {
-            let _ = pool.borrow_mut().meta_dev.flush_log_sync(cno).await;
+            let _ = pool.borrow().meta_dev.borrow_mut().flush_log_sync(cno).await;
         }
 
         let dirty_region = region.collect();
@@ -277,11 +277,11 @@ impl<T: Replica + 'static> TaskManager<T> {
         debug!("{}", pool.borrow().piopr);
 
         // close preg
-        let _ = pool.borrow_mut().meta_dev.preg.close().await;
+        let _ = pool.borrow().meta_dev.borrow_mut().preg.close().await;
         #[cfg(feature="piopr")]
-        let _ = pool.borrow_mut().meta_dev.preg2.close().await;
+        let _ = pool.borrow().meta_dev.borrow_mut().preg2.close().await;
         // finally close superblock
-        let _ = pool.borrow_mut().meta_dev.sb_close_sync().await;
+        let _ = pool.borrow().meta_dev.borrow_mut().sb_close_sync().await;
 
         std::process::exit(0);
     }
