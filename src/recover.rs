@@ -540,15 +540,6 @@ impl RecoverCtrl {
                 drop(region);
             },
         };
-        // handle RecoverState::Clean and RecoverState::Dirty
-        let mode = *self.mode.read_arc().await;
-        assert!(
-            mode == state::TGT_STATE_RECOVERY_FORWARD_FULL
-            || mode == state::TGT_STATE_RECOVERY_FORWARD_PART
-            || mode == state::TGT_STATE_RECOVERY_FORWARD_FINAL
-            || mode == state::TGT_STATE_RECOVERY_REVERSE_FULL
-        );
-        // in both mode, go ahead to write on primary
         return;
     }
 
