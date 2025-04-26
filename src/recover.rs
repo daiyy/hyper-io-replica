@@ -601,8 +601,14 @@ impl RecoverCtrl {
     async fn do_state_transition<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>) {
         // hold region_dirty_again write lock as global transition lock
         let mut lock = self.region_dirty_again.write().await;
-        // time to check if we have region dirty again during the whole recover process
-        let dirty_count = lock.len();
+        // time to check if total dirty region count in region dirty again and g_region during the whole recover process
+        let mut all = Vec::new();
+        let mut v_dirty_region_again: Vec<u64> = lock.iter().map(|i| *i).collect();
+        let mut v_dirty_region: Vec<u64> = g_region.collect();
+        all.append(&mut v_dirty_region_again);
+        all.append(&mut v_dirty_region);
+        all.dedup();
+        let dirty_count = all.len();
         if dirty_count > DEFAULT_FORWARD_FINAL_TRANSITION_THRESHOLD {
             debug!("RecoverCtrl - state transition to FORWARD PART - dirty region count {} > {}", dirty_count, DEFAULT_FORWARD_FINAL_TRANSITION_THRESHOLD);
             // too much dirty regions start over forward part again
