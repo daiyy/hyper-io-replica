@@ -281,6 +281,7 @@ impl RecoverCtrl {
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
         // we can now safely change global state
+        self.g_state.clear_all_recover_bits();
         match mode {
             state::TGT_STATE_RECOVERY_FORWARD_FULL => {
                 self.g_state.set_recovery_forward_full();
@@ -320,6 +321,7 @@ impl RecoverCtrl {
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
         // we can now safely change global state
+        self.g_state.clear_all_recover_bits();
         self.g_state.set_recovery_forward_part();
 
         // get all dirty regions
@@ -378,6 +380,7 @@ impl RecoverCtrl {
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
         // we can now safely change global state
+        self.g_state.clear_all_recover_bits();
         self.g_state.set_recovery_forward_final();
 
         // rebuild
