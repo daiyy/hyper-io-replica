@@ -288,6 +288,8 @@ impl<T> TgtPendingBlocksPool<T> {
             pending_bytes: self.pending_bytes,
             inflight_bytes: self.inflight_bytes,
             max_capacity: self.max_capacity,
+            l_seq: self.l_seq,
+            g_seq: self.g_seq.get(),
         }
     }
 
