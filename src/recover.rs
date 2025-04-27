@@ -320,9 +320,67 @@ impl RecoverCtrl {
         // mode as whole transaction lock
         let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
+        // get all dirty regions
+        let v = g_region.collect();
+        // rebuild
+        let mut map = HashMap::new();
+        let nr_regions = g_region.nr_regions();
+        for i in 0..nr_regions {
+            map.insert(i, Arc::new(Mutex::new(Region::new(i, RecoverState::Clean))));
+        }
+        // update NoSync region
+        let mut nosync = Vec::new();
+        for i in v.iter() {
+            let region = Arc::new(Mutex::new(Region::new(*i, RecoverState::NoSync)));
+            map.insert(*i, region.clone());
+            nosync.push((*i, region));
+        }
+        // try merge with region dirty again
+        for i in v_region_dirty_again.iter() {
+            let region = Arc::new(Mutex::new(Region::new(*i, RecoverState::NoSync)));
+            map.insert(*i, region.clone());
+            nosync.push((*i, region));
+        }
+        if v_region_dirty_again.len() > 0 {
+            nosync.dedup_by_key(|i| i.0);
+        }
+
+        // sort by key
+        let mut sorted: Vec<_> = nosync.iter().collect();
+        sorted.sort_by_key(|i| i.0);
+
+        // build queue for NoSync region
+        let mut queue = VecDeque::new();
+        for (region_id, region) in sorted.into_iter() {
+            queue.push_back((*region_id, region.clone()));
+        }
+
+        self.inc_pending(queue.len() as u64);
+
+        // update inner
+        let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
+        *lock = queue;
+
+        let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
+        *lock = map;
+
+        // reset global region and clear dirty flag
+        g_region.reset();
+
         // we can now safely change global state
-        self.g_state.clear_all_recover_bits();
-        self.g_state.set_recovery_forward_part();
+        if self.g_state.is_logging_enabled() {
+            self.g_state.set_recovery_forward_part();
+        } else {
+            self.g_state.set_recovery_forward_part_logging_disabled();
+        }
+
+        // release mode lock
+        *mode_lock = state::TGT_STATE_RECOVERY_FORWARD_PART;
+    }
+
+    pub(crate) fn rebuild_mode_forward_final(&self, g_region: Rc<region::Region>, v_region_dirty_again: Vec<u64>) {
+        // mode as whole transaction lock
+        let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
         // get all dirty regions
         let v = g_region.collect();
@@ -362,62 +420,21 @@ impl RecoverCtrl {
         self.inc_pending(queue.len() as u64);
 
         // update inner
-        let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
-        *lock = map;
-
         let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
         *lock = queue;
 
+        let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
+        *lock = map;
+
         // reset global region and clear dirty flag
         g_region.reset();
-
-        // release mode lock
-        *mode_lock = state::TGT_STATE_RECOVERY_FORWARD_PART;
-    }
-
-    pub(crate) fn rebuild_mode_forward_final(&self, g_region: Rc<region::Region>, v_region_dirty_again: Vec<u64>) {
-        // mode as whole transaction lock
-        let mut mode_lock = self.mode.try_write_arc().expect("unable to get write lock for mode");
 
         // we can now safely change global state
-        self.g_state.clear_all_recover_bits();
-        self.g_state.set_recovery_forward_final();
-
-        // rebuild
-        let mut map = HashMap::new();
-        let nr_regions = g_region.nr_regions();
-        for i in 0..nr_regions {
-            map.insert(i, Arc::new(Mutex::new(Region::new(i, RecoverState::Clean))));
+        if self.g_state.is_logging_enabled() {
+            self.g_state.set_recovery_forward_final();
+        } else {
+            self.g_state.set_recovery_forward_final_logging_disabled();
         }
-        let mut nosync = Vec::new();
-        // region dirty again
-        for i in v_region_dirty_again.iter() {
-            let region = Arc::new(Mutex::new(Region::new(*i, RecoverState::NoSync)));
-            map.insert(*i, region.clone());
-            nosync.push((*i, region));
-        }
-
-        // sort by key
-        let mut sorted: Vec<_> = nosync.iter().collect();
-        sorted.sort_by_key(|i| i.0);
-
-        // build queue for NoSync region
-        let mut queue = VecDeque::new();
-        for (region_id, region) in sorted.into_iter() {
-            queue.push_back((*region_id, region.clone()));
-        }
-
-        self.inc_pending(queue.len() as u64);
-
-        // update inner
-        let mut lock = self.region_map.try_write_arc().expect("unable to get write lock for region_map");
-        *lock = map;
-
-        let mut lock = self.queue.try_lock_arc().expect("unable to get lock for prio queue");
-        *lock = queue;
-
-        // reset global region and clear dirty flag
-        g_region.reset();
 
         // release mode lock
         *mode_lock = state::TGT_STATE_RECOVERY_FORWARD_FINAL;
@@ -514,11 +531,16 @@ impl RecoverCtrl {
     // write op run in queue executor context
     pub(crate) async fn q_recover_write(&self, region_id: u64) {
         if self.g_state.is_recovery_forward_final() {
-            return self.wait_on_forward_final().await;
+            self.wait_on_forward_final().await;
+            if !self.g_state.is_recovery() {
+                // if we leave recovery mode, let quit
+                return;
+            }
         }
+
         // in both forward and reverse mode, write io will be blocked
         let r = self.lookup(region_id).await;
-        let mut region = r.lock().await;
+        let region = r.lock().await;
         let state = region.state;
         match state {
             RecoverState::NoSync => {
@@ -526,21 +548,20 @@ impl RecoverCtrl {
                 self.put_high_prio(region_id).await;
                 drop(region);
                 Self::wait_on(r.clone()).await;
+                // mark this region dirty in dirty again list
+                let _ = self.region_dirty_again.write().await.insert(region_id);
             },
             RecoverState::Recovering => {
                 drop(region);
                 Self::wait_on(r.clone()).await;
+                // mark this region dirty in dirty again list
+                let _ = self.region_dirty_again.write().await.insert(region_id);
             },
             RecoverState::Clean => {
-                // mark this region dirty again
-                region.state = RecoverState::Dirty;
-                drop(region);
-                if !self.region_dirty_again.read().await.contains(&region_id) {
-                    let _ = self.region_dirty_again.write().await.insert(region_id);
-                }
+                // mark this region dirty in dirty again list
+                let _ = self.region_dirty_again.write().await.insert(region_id);
             },
             RecoverState::Dirty => {
-                drop(region);
             },
         };
         return;

@@ -176,9 +176,19 @@ impl GlobalTgtState {
         let _ = self.inner.fetch_or(state, Ordering::SeqCst);
     }
 
+    pub(crate) fn set_recovery_forward_part_logging_disabled(&self) {
+        let state = TGT_STATE_RECOVERY_FORWARD_PART;
+        let _ = self.inner.store(state, Ordering::SeqCst);
+    }
+
     pub(crate) fn set_recovery_forward_final(&self) {
         let state = TGT_STATE_RECOVERY_FORWARD_FINAL;
         let _ = self.inner.fetch_or(state, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_recovery_forward_final_logging_disabled(&self) {
+        let state = TGT_STATE_RECOVERY_FORWARD_FINAL;
+        let _ = self.inner.store(state, Ordering::SeqCst);
     }
 
     pub(crate) fn clear_all_recover_bits(&self) -> u64 {
