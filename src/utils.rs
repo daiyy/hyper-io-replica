@@ -108,6 +108,7 @@ pub(crate) fn rublk_prep_dump_dev(shm_id: Option<String>, fg: bool, ctrl: &UblkC
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn iod_fmt(iod: &ublksrv_io_desc, region_shift: u32) -> String {
     let offset = iod.start_sector << 9;
     let bytes = iod.nr_sectors << 9;
