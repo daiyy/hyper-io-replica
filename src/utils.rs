@@ -4,6 +4,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{fence, Ordering};
 use ilog::IntLog;
 use libublk::ctrl::UblkCtrl;
+use libublk::sys::*;
 use shared_memory::*;
 
 pub(crate) fn is_all_zeros(buf: &[u8]) -> bool {
@@ -105,4 +106,48 @@ pub(crate) fn rublk_prep_dump_dev(shm_id: Option<String>, fg: bool, ctrl: &UblkC
     } else {
         ctrl.dump();
     }
+}
+
+pub(crate) fn iod_fmt(iod: &ublksrv_io_desc, region_shift: u32) -> String {
+    let offset = iod.start_sector << 9;
+    let bytes = iod.nr_sectors << 9;
+
+    let op = iod.op_flags & 0xff;
+    let mut o = Vec::new();
+    match op {
+        UBLK_IO_OP_READ => { o.push("Read"); },
+        UBLK_IO_OP_FLUSH => { o.push("Flush"); },
+        UBLK_IO_OP_WRITE => { o.push("Write"); },
+        UBLK_IO_OP_DISCARD => { o.push("Discard"); },
+        UBLK_IO_OP_ZONE_OPEN => { o.push("ZoneOpen"); },
+        UBLK_IO_OP_WRITE_SAME => { o.push("WriteSame"); },
+        UBLK_IO_OP_ZONE_CLOSE => { o.push("ZoneClose"); },
+        UBLK_IO_OP_ZONE_RESET => { o.push("ZoneReset"); },
+        UBLK_IO_OP_ZONE_APPEND => { o.push("ZoneAppend"); },
+        UBLK_IO_OP_ZONE_FINISH => { o.push("ZoneFinish"); },
+        UBLK_IO_OP_REPORT_ZONES => { o.push("ReportZones"); },
+        UBLK_IO_OP_WRITE_ZEROES => { o.push("WriteZeroes"); },
+        UBLK_IO_OP_ZONE_RESET_ALL => { o.push("ZoneResetAll"); },
+        _ => { o.push("Unkown"); },
+    }
+	let o_str = o.join(" | ");
+
+    let mut f = Vec::new();
+    let flags = iod.op_flags & 0xfff00;
+    if flags & UBLK_IO_F_FAILFAST_DEV > 0 { f.push("FailFastDev"); }
+    if flags & UBLK_IO_F_FAILFAST_TRANSPORT > 0 { f.push("FailFastTransport"); }
+    if flags & UBLK_IO_F_FAILFAST_DRIVER > 0 { f.push("FailFastDriver"); }
+    if flags & UBLK_IO_F_META > 0 { f.push("Meta"); }
+    if flags & UBLK_IO_F_FUA > 0 { f.push("Fua"); }
+    if flags & UBLK_IO_F_NOUNMAP > 0 { f.push("NoUnmap"); }
+    if flags & UBLK_IO_F_SWAP > 0 { f.push("Swap"); }
+    let f_str = f.join(" | ");
+    let f_str = if f_str == "" {
+        "-"
+    } else {
+        &f_str
+    };
+
+    let region_id = offset / (1 << region_shift);
+    format!("IoDesc {{ op: {}, flag: {}, region: {}, offset: {}, bytes: {}, op_flags: {:x}}}", o_str, f_str, region_id, offset, bytes, iod.op_flags)
 }
