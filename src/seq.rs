@@ -12,10 +12,10 @@ impl IncrSeq {
         Self { inner: Arc::new(AtomicU64::new(1)) }
     }
 
+    #[inline]
     pub(crate) fn next(&self, op_flags: u32) -> u64 {
-        if op_flags & libublk::sys::UBLK_IO_F_META == libublk::sys::UBLK_IO_F_META ||
-            op_flags & libublk::sys::UBLK_IO_OP_FLUSH == libublk::sys::UBLK_IO_OP_FLUSH
-        {
+        let op = op_flags & 0xff;
+        if op == libublk::sys::UBLK_IO_OP_WRITE {
             return self.inner.fetch_add(1, Ordering::SeqCst);
         }
         0
