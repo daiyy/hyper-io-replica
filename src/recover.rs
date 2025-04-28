@@ -98,12 +98,32 @@ impl Region {
     }
 }
 
+struct RecoverQueue {
+    // normal queue for recover in sequence order
+    normal: BTreeMap<u64, Arc<Mutex<Region>>>,
+    // high priority queue for read/write ahead
+    highprio: VecDeque<(u64, Arc<Mutex<Region>>)>,
+}
+
+impl RecoverQueue {
+    fn new() -> Self {
+        Self {
+            normal: BTreeMap::new(),
+            highprio: VecDeque::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.normal.len() + self.highprio.len()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RecoverCtrl {
     primary_path: String,
     replica_path: String,
     region_map: Arc<RwLock<HashMap<u64, Arc<Mutex<Region>>>>>,
-    queue: Arc<Mutex<VecDeque<(u64, Arc<Mutex<Region>>)>>>,
+    queue: Arc<Mutex<RecoverQueue>>,
     mode: Arc<RwLock<u64>>,
     g_state: GlobalTgtState,
     region_size: u64,
@@ -125,7 +145,8 @@ impl fmt::Debug for RecoverCtrl {
 
         let mut inflight = 0;
         let mut pending = 0;
-        for (id, region) in self.queue.try_lock_arc().expect("unable to get read lock for queue").iter() {
+        let queue_inner = self.queue.try_lock_arc().expect("unable to get read lock for queue");
+        for (id, region) in queue_inner.normal.iter() {
             let region_lock = region.try_lock_arc().expect("unable to get read lock for recover region");
             match (*region_lock).state {
                 RecoverState::Recovering => { inflight += 1; },
@@ -133,6 +154,15 @@ impl fmt::Debug for RecoverCtrl {
                 s @ _ => { panic!("invalide region {} state {:?} in recovery queue", id, s); },
             }
         }
+        for (id, region) in queue_inner.highprio.iter() {
+            let region_lock = region.try_lock_arc().expect("unable to get read lock for recover region");
+            match (*region_lock).state {
+                RecoverState::Recovering => { inflight += 1; },
+                RecoverState::NoSync => { pending += 1; },
+                s @ _ => { panic!("invalide region {} state {:?} in recovery queue", id, s); },
+            }
+        }
+        drop(queue_inner);
 
         let mode = *mode_lock;
         drop(mode_lock);
@@ -148,7 +178,7 @@ impl Default for RecoverCtrl {
             primary_path: String::new(),
             replica_path: String::new(),
             region_map: Arc::new(RwLock::new(HashMap::new())),
-            queue: Arc::new(Mutex::new(VecDeque::new())),
+            queue: Arc::new(Mutex::new(RecoverQueue::new())),
             mode: Arc::new(RwLock::new(state::TGT_STATE_LOGGING_ENABLED)),
             g_state: GlobalTgtState::new(),
             region_size: 0,
@@ -236,9 +266,9 @@ impl RecoverCtrl {
         let mut sorted: Vec<_> = map.iter().collect();
         sorted.sort_by_key(|i| i.0);
 
-        let mut queue = VecDeque::new();
+        let mut queue = RecoverQueue::new();
         for (region_id, region) in sorted.into_iter() {
-            queue.push_back((*region_id, region.clone()));
+            queue.normal.insert(*region_id, region.clone());
         }
         let (tx, rx) = channel::bounded(1);
         Self {
@@ -259,7 +289,7 @@ impl RecoverCtrl {
         }
     }
 
-    fn init_no_sync(nr_regions: u64) -> (HashMap<u64, Arc<Mutex<Region>>>, VecDeque<(u64, Arc<Mutex<Region>>)>) {
+    fn init_no_sync(nr_regions: u64) -> (HashMap<u64, Arc<Mutex<Region>>>, RecoverQueue) {
         let mut map = HashMap::new();
         for i in 0..nr_regions {
             map.insert(i, Arc::new(Mutex::new(Region::new(i, RecoverState::NoSync))));
@@ -269,9 +299,9 @@ impl RecoverCtrl {
         let mut sorted: Vec<_> = map.iter().collect();
         sorted.sort_by_key(|i| i.0);
 
-        let mut queue = VecDeque::new();
+        let mut queue = RecoverQueue::new();
         for (region_id, region) in sorted.into_iter() {
-            queue.push_back((*region_id, region.clone()));
+            queue.normal.insert(*region_id, region.clone());
         }
         (map, queue)
     }
@@ -350,9 +380,9 @@ impl RecoverCtrl {
         sorted.sort_by_key(|i| i.0);
 
         // build queue for NoSync region
-        let mut queue = VecDeque::new();
+        let mut queue = RecoverQueue::new();
         for (region_id, region) in sorted.into_iter() {
-            queue.push_back((*region_id, region.clone()));
+            queue.normal.insert(*region_id, region.clone());
         }
 
         self.inc_pending(queue.len() as u64);
@@ -412,9 +442,9 @@ impl RecoverCtrl {
         sorted.sort_by_key(|i| i.0);
 
         // build queue for NoSync region
-        let mut queue = VecDeque::new();
+        let mut queue = RecoverQueue::new();
         for (region_id, region) in sorted.into_iter() {
-            queue.push_back((*region_id, region.clone()));
+            queue.normal.insert(*region_id, region.clone());
         }
 
         self.inc_pending(queue.len() as u64);
@@ -454,25 +484,22 @@ impl RecoverCtrl {
 
     // re-priority of specific region by it's id
     pub(crate) async fn put_high_prio(&self, region_id: u64) {
-        let mut queue = self.queue.lock().await;
-        // find region in prio queue
-        let mut found = None;
-        for (idx, r) in queue.iter().enumerate() {
-            if r.0 == region_id {
-                found = Some(idx);
-                break;
-            }
-        }
-        // if found, put to front
-        if let Some(idx) = found {
-            let (id, region) = queue.remove(idx).expect("unable to take out region from prio queue by it's index");
-            queue.push_front((id, region));
+        let mut queue_inner = self.queue.lock().await;
+        // try find region in normal queue and insert into end of high priority queue
+        if let Some(region) = queue_inner.normal.remove(&region_id) {
+            queue_inner.highprio.push_back((region_id, region));
         }
     }
 
     // fetch one candidate from top of prio queue
     pub(crate) async fn fetch_one(&self) -> Option<(u64, Arc<Mutex<Region>>)> {
-        self.queue.lock().await.pop_front()
+        let mut queue_inner = self.queue.lock().await;
+        // try high priority queue first
+        if let Some((id, region)) = queue_inner.highprio.pop_front() {
+            return Some((id, region));
+        }
+        // then try normal queue
+        queue_inner.normal.pop_first()
     }
 
     // infinite loop wait on region state from NoSync || Recovering -> Dirty || Clean
