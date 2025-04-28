@@ -1,5 +1,6 @@
 use std::fmt;
 use std::sync::atomic::Ordering;
+use std::collections::BTreeMap;
 use serde::{Serialize, Deserialize};
 use crate::recover::RecoverState;
 use crate::mgmt::Global;
@@ -93,13 +94,14 @@ impl<T> Stats<T> {
         let map = if state & mask > 0 {
             self.global.recover.stat_region_map()
         } else {
-            Vec::new()
+            BTreeMap::new()
         };
+        let v = map.into_iter().map(|(k, v)| (k, v)).collect();
         let recover = RecoverStats {
             inflight: i,
             pending: p,
             nr_regions: n,
-            map: map,
+            map: v,
         };
 
         // pool

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use std::collections::{HashMap, VecDeque, HashSet};
+use std::collections::{HashMap, VecDeque, HashSet, BTreeMap};
 use smol::channel;
 use smol::lock::{Mutex, RwLock};
 use smol::Executor;
@@ -787,17 +787,17 @@ impl RecoverCtrl {
     }
 
     // vec of region and it's recover state
-    pub(crate) fn stat_region_map(&self) -> Vec<(u64, RecoverState)> {
+    pub(crate) fn stat_region_map(&self) -> BTreeMap<u64, RecoverState> {
         let regions = self.region_map.clone();
         let v = smol::block_on(async move {
-            let mut vec = Vec::new();
+            let mut map = BTreeMap::new();
             for (id, region) in regions.read_arc().await.iter() {
                 let lock = region.lock_arc().await;
                 let state = lock.state;
                 drop(lock);
-                vec.push((*id, state));
+                map.insert(*id, state);
             }
-            vec
+            map
         });
         v
     }
