@@ -476,14 +476,24 @@ impl RecoverCtrl {
     }
 
     // infinite loop wait on region state from NoSync || Recovering -> Dirty || Clean
-    pub(crate) async fn wait_on(region: Arc<Mutex<Region>>) {
+    // return:
+    //   - true: leave recovery process
+    //   - false: still in recovery process
+    pub(crate) async fn wait_on(&self, region: Arc<Mutex<Region>>) -> bool {
         loop {
             let lock = region.lock().await;
             if lock.state == RecoverState::Dirty || lock.state == RecoverState::Clean {
-                break;
+                if !self.g_state.is_recovery() {
+                    return true;
+                }
+                return false;
             }
             drop(lock);
             smol::Timer::after(std::time::Duration::from_millis(RECOVERY_WAIT_ON_MS)).await;
+            // if after wait timeout, we are quit recovery process, let's quit
+            if !self.g_state.is_recovery() {
+                return true;
+            }
         }
     }
 
@@ -514,11 +524,11 @@ impl RecoverCtrl {
                 // trigger recover of this region in high priority
                 self.put_high_prio(region_id).await;
                 drop(region);
-                Self::wait_on(r.clone()).await;
+                self.wait_on(r.clone()).await;
             },
             RecoverState::Recovering => {
                 drop(region);
-                Self::wait_on(r.clone()).await;
+                self.wait_on(r.clone()).await;
             },
             _ => {
             },
@@ -532,6 +542,7 @@ impl RecoverCtrl {
     pub(crate) async fn q_recover_write(&self, region_id: u64) {
         if self.g_state.is_recovery_forward_final() {
             self.wait_on_forward_final().await;
+            return;
         }
 
         // in both forward and reverse mode, write io will be blocked
@@ -543,13 +554,17 @@ impl RecoverCtrl {
                 // trigger recover of this region in high priority
                 self.put_high_prio(region_id).await;
                 drop(region);
-                Self::wait_on(r.clone()).await;
+                if self.wait_on(r.clone()).await {
+                    return;
+                }
                 // mark this region dirty in dirty again list
                 let _ = self.region_dirty_again.write().await.insert(region_id);
             },
             RecoverState::Recovering => {
                 drop(region);
-                Self::wait_on(r.clone()).await;
+                if self.wait_on(r.clone()).await {
+                    return;
+                }
                 // mark this region dirty in dirty again list
                 let _ = self.region_dirty_again.write().await.insert(region_id);
             },
