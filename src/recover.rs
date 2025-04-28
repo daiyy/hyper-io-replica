@@ -615,7 +615,7 @@ impl RecoverCtrl {
     //  - logging enabled (recover done)
     //  - forward part again
     //  - forward final
-    async fn do_state_transition<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>) {
+    async fn do_state_transition<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>, task_state: TaskState) {
         // hold region_dirty_again write lock as global transition lock
         let mut lock = self.region_dirty_again.write().await;
         // time to check if total dirty region count in region dirty again and g_region during the whole recover process
@@ -645,6 +645,7 @@ impl RecoverCtrl {
             self.g_state.set_logging_enable();
             *mode_lock = state;
             pool.borrow().meta_dev.borrow_mut().sb_state_sync(state).await;
+            task_state.set_start(TaskId::PeriodicReplicaFlush);
             return;
         }
         debug!("RecoverCtrl - state transition to FORWARD FINAL - dirty region count {}", dirty_count);
@@ -656,7 +657,7 @@ impl RecoverCtrl {
     }
 
     // main control of recover process
-    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>, exec: Executor<'a>) {
+    pub(crate) async fn do_recovery<'a, T: Replica + 'a>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>, task_state: TaskState, exec: Executor<'a>) {
         let replica = pool.borrow().replica_device.dup().await;
         // prepare recover mode
         let mode = self.mode.read_arc().await;
@@ -669,6 +670,12 @@ impl RecoverCtrl {
         };
         pool.borrow().meta_dev.borrow_mut().sb_state_sync(*mode).await;
         drop(mode);
+        if forward {
+            task_state.set_stop(TaskId::PeriodicReplicaFlush);
+            task_state.wait_on_stopped(TaskId::PeriodicReplicaFlush).await;
+            // do a final flush
+            let _ = replica.flush().await;
+        }
 
         let sema = Arc::new(Semaphore::new(self.concurrency.load(Ordering::SeqCst)));
         let region_size = self.region_size;
@@ -715,7 +722,7 @@ impl RecoverCtrl {
         if !forward {
             debug!("RecoverCtrl - state transition from REVERSE FULL");
         }
-        self.do_state_transition(pool, g_region).await;
+        self.do_state_transition(pool, g_region, task_state.clone()).await;
     }
 
     #[allow(dead_code)]
@@ -811,7 +818,7 @@ impl RecoverCtrl {
             let exec = smol::Executor::new();
             task_state.set_busy(TaskId::Recover);
             if cmd {
-                self.do_recovery(pool.clone(), g_region.clone(), exec).await;
+                self.do_recovery(pool.clone(), g_region.clone(), task_state.clone(), exec).await;
             }
             task_state.clear_busy(TaskId::Recover);
         }

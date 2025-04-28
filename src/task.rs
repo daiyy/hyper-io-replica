@@ -53,6 +53,20 @@ impl TaskState {
         let _ = self.inner.fetch_and(!(id as u64), Ordering::SeqCst);
     }
 
+    pub(crate) async fn wait_on_stopped(&self, id: TaskId) {
+        let id_n = id as u64;
+        let busy_bit = id_n << 32;
+        let task_bit = id_n;
+        let mask = busy_bit | task_bit;
+        loop {
+            if self.inner.fetch_and(mask, Ordering::SeqCst) == 0 {
+                // busy bit and task bit cleared
+                break;
+            }
+            smol::Timer::after(Duration::from_millis(10)).await;
+        }
+    }
+
     pub(crate) fn is_open(&self, id: TaskId) -> bool {
         let state = self.inner.load(Ordering::SeqCst);
         let task_id = id as u64;
