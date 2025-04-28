@@ -532,10 +532,6 @@ impl RecoverCtrl {
     pub(crate) async fn q_recover_write(&self, region_id: u64) {
         if self.g_state.is_recovery_forward_final() {
             self.wait_on_forward_final().await;
-            if !self.g_state.is_recovery() {
-                // if we leave recovery mode, let quit
-                return;
-            }
         }
 
         // in both forward and reverse mode, write io will be blocked
