@@ -91,11 +91,15 @@ impl<T> Stats<T> {
         // recover
         let (i, p, n) = self.global.recover.stat();
         let mask = state::TGT_STATE_RECOVERY_MASK;
-        let map = if state & mask > 0 {
+        let mut map = if state & mask > 0 {
             self.global.recover.stat_region_map()
         } else {
             BTreeMap::new()
         };
+        // patch recover map with dirty region
+        for region_id in &region.dirty_ids {
+            let _ = map.insert(*region_id, RecoverState::Dirty);
+        }
         let v = map.into_iter().map(|(k, v)| (k, v)).collect();
         let recover = RecoverStats {
             inflight: i,
