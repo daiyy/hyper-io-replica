@@ -230,7 +230,7 @@ impl<T: Replica + 'static> TaskManager<T> {
         Ok(())
     }
 
-    async fn inner_stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, region: Rc<Region>, _recover: Rc<RecoverCtrl>, task_state: TaskState) -> Result<(), UblkError> {
+    async fn inner_stop(pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, state: Rc<GlobalTgtState>, region: Rc<Region>, recover: Rc<RecoverCtrl>, task_state: TaskState) -> Result<(), UblkError> {
         let dev_id = pool.borrow().dev_id;
 
         // stop ublk dev in a blocking thread
@@ -278,6 +278,11 @@ impl<T: Replica + 'static> TaskManager<T> {
         let cno = replica.close().await?;
         if  last_primary_metadata_cno < cno {
             let _ = pool.borrow().meta_dev.borrow_mut().flush_log_sync(cno).await;
+        }
+
+        let v = recover.collect_region_dirty_again().await;
+        if v.len() > 0 {
+            warn!("TaskManager - before exit - dirty region again {:?}", v);
         }
 
         let dirty_region = region.collect();

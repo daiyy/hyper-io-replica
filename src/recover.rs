@@ -851,6 +851,11 @@ impl RecoverCtrl {
         v
     }
 
+    pub(crate) async fn collect_region_dirty_again(&self) -> Vec<u64> {
+        let lock = self.region_dirty_again.read().await;
+        Vec::from_iter(lock.clone())
+    }
+
     pub(crate) async fn main_loop<T: Replica>(&self, pool: Rc<RefCell<TgtPendingBlocksPool<T>>>, g_region: Rc<region::Region>, task_state: TaskState) {
         task_state.wait_on_tgt_pool_start().await;
         task_state.set_start(TaskId::Recover);
