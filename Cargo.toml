@@ -32,6 +32,7 @@ block-utils = "0.11.1"
 uuid = { version = "1.13.1", features = ["v4"] }
 time = { version = "0.3.37", features = ["formatting", "parsing"] }
 ctrlc = "3.4.5"
+memx = { version = "0.1.32", optional = true }
 aws-config = { version = "1.5.15", features = ["behavior-version-latest"], optional = true  }
 aws-sdk-s3 = { version = "1.71.0", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
@@ -42,6 +43,7 @@ reactor = { version = "0.1.0", path = "../reactor", optional = true }
 blocking = ["dep:hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
 reactor = ["dep:reactor", "dep:hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
 piopr = []
+fastmemcpy = ["dep:memx"]
 default = ["reactor", "piopr"]
 
 [[bin]]

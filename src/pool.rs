@@ -70,6 +70,13 @@ impl PendingIo {
 
         // op WRITE
         let data = IoBuf::new(size as usize);
+        #[cfg(feature="fastmemcpy")]
+        {
+            let src = unsafe { std::slice::from_raw_parts(iod.addr as *const u8, size as usize) };
+            let dst = unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, size as usize) };
+            let _ = memx::memcpy(dst, src);
+        }
+        #[cfg(not(feature="fastmemcpy"))]
         unsafe {
             std::ptr::copy_nonoverlapping(iod.addr as *const u8, data.as_mut_ptr(), size as usize);
         }
