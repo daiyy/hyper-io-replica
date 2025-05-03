@@ -44,7 +44,8 @@ blocking = ["dep:hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
 reactor = ["dep:reactor", "dep:hyperfile", "dep:tokio", "dep:aws-config", "dep:aws-sdk-s3"]
 piopr = []
 fastmemcpy = ["dep:memx"]
-default = ["reactor", "piopr"]
+pio-write-batch = []
+default = ["reactor", "piopr", "pio-write-batch"]
 
 [[bin]]
 name = "format"

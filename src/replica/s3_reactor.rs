@@ -11,6 +11,8 @@ use hyperfile::file::hyper::Hyper;
 use hyperfile::file::flags::FileFlags;
 use hyperfile::file::handler::FileContext;
 use hyperfile::config::HyperFileRuntimeConfig;
+#[cfg(feature="pio-write-batch")]
+use hyperfile::buffer::DataBlockWrapper;
 
 pub struct S3Replica<'a> {
     pub device_path: String,
@@ -63,6 +65,76 @@ impl<'a: 'static> S3Replica<'a> {
             };
         }
         panic!("invalid input device path {dev_path} for s3 replica");
+    }
+
+    #[cfg(feature="pio-write-batch")]
+    async fn do_write_batch(&self, blocks: Vec<DataBlockWrapper>) -> Result<usize> {
+        let (ctx, mut rx) = FileContext::new_write_aligned_batch(blocks);
+        let rt = self.rt.clone();
+        self.state.set_write();
+        self.handler.send(ctx);
+        let res = smol::unblock(move || {
+            rt.block_on(async {
+                rx.recv().await.expect("task channel closed")
+            })
+        }).await;
+        self.state.clear_write();
+        res
+    }
+
+    #[cfg(feature="pio-write-batch")]
+    async fn write_batch(&self, pending: Vec<PendingIo>) -> Result<usize> {
+        let block_size = self.stat.st_blksize as u64;
+        let mut total = 0;
+        let mut batch = Vec::new();
+        let mut list = pending.into_iter();
+        loop {
+            if let Some(io) = list.next() {
+
+                if io.size() == 0 {
+                    assert!(io.data_size() == 0);
+                    continue;
+                }
+                let offset = io.offset();
+                let size = io.data_size();
+                let buf = io.as_ref();
+                if (offset % block_size != 0) || (size as u64 % block_size != 0) {
+                    // not a aligned block, use normal write path
+                    if batch.len() > 0 {
+                        // write all pending io before this non aligned block
+                        let mut v = Vec::new();
+                        v.append(&mut batch);
+                        let bytes = self.do_write_batch(v).await.expect("unable to write batch replica deivce");
+                        total += bytes;
+                    }
+                    let bytes = self.write(offset, buf).await.expect("unable to write replica deivce");
+                    total += bytes;
+                    continue;
+                }
+                // aligned block, split into block size chunks
+                let mut start_offset = offset;
+                for block_buf in buf.chunks(block_size as usize) {
+                    let blk_idx = start_offset / block_size;
+                    let block = if utils::is_all_zeros(block_buf) {
+                        DataBlockWrapper::new(blk_idx, block_size as usize, true)
+                    } else {
+                        let b = DataBlockWrapper::new(blk_idx, block_size as usize, false);
+                        b.as_mut_slice().copy_from_slice(block_buf);
+                        b
+                    };
+                    batch.push(block);
+                    start_offset += block_size;
+                }
+            } else {
+                break;
+            }
+        }
+        // send all remains
+        if batch.len() > 0 {
+            let bytes = self.do_write_batch(batch).await.expect("unable to write batch replica deivce");
+            total += bytes;
+        }
+        Ok(total)
     }
 }
 
@@ -175,6 +247,11 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
         let mut _bytes = 0;
         self.state.set_logging();
+        #[cfg(feature="pio-write-batch")]
+        {
+            _bytes = self.write_batch(pending).await?;
+        }
+        #[cfg(not(feature="pio-write-batch"))]
         for io in pending.into_iter() {
             if io.size() == 0 {
                 assert!(io.data_size() == 0);
