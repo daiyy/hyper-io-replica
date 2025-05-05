@@ -2,6 +2,7 @@ use std::io::Result;
 use std::sync::Arc;
 use tokio::runtime;
 use tokio::sync::oneshot;
+use log::debug;
 use super::{Replica, ReplicaState};
 use crate::replica::PendingIo;
 use crate::utils;
@@ -84,6 +85,9 @@ impl<'a: 'static> S3Replica<'a> {
 
     #[cfg(feature="pio-write-batch")]
     async fn write_batch(&self, pending: Vec<PendingIo>) -> Result<usize> {
+        let start = std::time::Instant::now();
+        let (mut stats_batch_count, mut stats_batch_bytes) = (0, 0);
+        let (mut stats_solo_count, mut stats_solo_bytes) = (0, 0);
         let block_size = self.stat.st_blksize as u64;
         let mut total = 0;
         let mut batch = Vec::new();
@@ -106,9 +110,13 @@ impl<'a: 'static> S3Replica<'a> {
                         v.append(&mut batch);
                         let bytes = self.do_write_batch(v).await.expect("unable to write batch replica deivce");
                         total += bytes;
+                        stats_batch_count += 1;
+                        stats_batch_bytes += bytes;
                     }
                     let bytes = self.write(offset, buf).await.expect("unable to write replica deivce");
                     total += bytes;
+                    stats_solo_count += 1;
+                    stats_solo_bytes += bytes;
                     continue;
                 }
                 // aligned block, split into block size chunks
@@ -133,7 +141,11 @@ impl<'a: 'static> S3Replica<'a> {
         if batch.len() > 0 {
             let bytes = self.do_write_batch(batch).await.expect("unable to write batch replica deivce");
             total += bytes;
+            stats_solo_count += 1;
+            stats_solo_bytes += bytes;
         }
+        debug!("S3Replica - write batch - stats {{ batch_count: {}, batch_bytes: {}, solo_count: {}, solo_bytes: {} }} - cost: {:?}",
+            stats_batch_count, stats_batch_bytes, stats_solo_count, stats_solo_bytes, start.elapsed());
         Ok(total)
     }
 }
