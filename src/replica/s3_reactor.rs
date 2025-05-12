@@ -13,7 +13,7 @@ use hyperfile::file::flags::FileFlags;
 use hyperfile::file::handler::FileContext;
 use hyperfile::config::HyperFileRuntimeConfig;
 #[cfg(feature="pio-write-batch")]
-use hyperfile::buffer::DataBlockWrapper;
+use hyperfile::buffer::AlignedDataBlockWrapper;
 
 pub struct S3Replica<'a> {
     pub device_path: String,
@@ -69,7 +69,7 @@ impl<'a: 'static> S3Replica<'a> {
     }
 
     #[cfg(feature="pio-write-batch")]
-    async fn do_write_batch(&self, blocks: Vec<DataBlockWrapper>) -> Result<usize> {
+    async fn do_write_batch(&self, blocks: Vec<AlignedDataBlockWrapper>) -> Result<usize> {
         let (ctx, mut rx) = FileContext::new_write_aligned_batch(blocks);
         let rt = self.rt.clone();
         self.state.set_write();
@@ -124,9 +124,9 @@ impl<'a: 'static> S3Replica<'a> {
                 for block_buf in buf.chunks(block_size as usize) {
                     let blk_idx = start_offset / block_size;
                     let block = if utils::is_all_zeros(block_buf) {
-                        DataBlockWrapper::new(blk_idx, block_size as usize, true)
+                        AlignedDataBlockWrapper::new(blk_idx, block_size as usize, true)
                     } else {
-                        let b = DataBlockWrapper::new(blk_idx, block_size as usize, false);
+                        let b = AlignedDataBlockWrapper::new(blk_idx, block_size as usize, false);
                         b.as_mut_slice().copy_from_slice(block_buf);
                         b
                     };
