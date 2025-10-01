@@ -6,7 +6,7 @@ use log::debug;
 use super::{Replica, ReplicaState};
 use crate::replica::PendingIo;
 use crate::utils;
-use reactor::{TaskHandler, LocalSpawner};
+use hyperfile_reactor::{TaskHandler, LocalSpawner};
 use hyperfile::s3uri::S3Uri;
 use hyperfile::file::hyper::Hyper;
 use hyperfile::file::flags::FileFlags;
@@ -178,7 +178,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
         let b = unsafe { std::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, buf.len()) };
-        let (ctx, tx, mut rx) = FileContext::new_read(b, offset as usize);
+        let (ctx, tx, mut rx) = FileContext::new_read(b, offset as usize, self.handler.clone());
         let rt = self.rt.clone();
         self.state.set_read();
         self.handler.send(ctx);
@@ -230,7 +230,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn flush(&self) -> Result<u64> {
-        let (ctx, rx) = FileContext::new_flush();
+        let (ctx, rx) = FileContext::new_flush(self.handler.clone());
         let rt = self.rt.clone();
         self.state.set_flush();
         self.handler.send(ctx);
@@ -244,7 +244,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn close(&self) -> Result<u64> {
-        let (ctx, rx) = FileContext::new_release();
+        let (ctx, rx) = FileContext::new_release(self.handler.clone());
         let rt = self.rt.clone();
         self.handler.send(ctx);
         let res = smol::unblock(move || {
