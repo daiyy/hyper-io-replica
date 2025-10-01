@@ -1,6 +1,7 @@
 use std::io::Result;
 use crate::replica::{Replica, PendingIo};
 
+#[allow(dead_code)]
 pub struct BlankReplica {}
 
 impl Replica for BlankReplica {
