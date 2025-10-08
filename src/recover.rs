@@ -686,7 +686,7 @@ impl RecoverCtrl {
             // enable logging
             self.g_state.set_logging_enable();
             *mode_lock = state;
-            pool.borrow().meta_dev.borrow_mut().sb_state_sync(state).await;
+            pool.borrow().meta_dev.lock().await.sb_state_sync(state).await;
             task_state.set_start(TaskId::PeriodicReplicaFlush);
             return;
         }
@@ -710,7 +710,7 @@ impl RecoverCtrl {
         } else {
             panic!("unkown RecoverCtrl mode {} found during kickoff recover", *mode);
         };
-        pool.borrow().meta_dev.borrow_mut().sb_state_sync(*mode).await;
+        pool.borrow().meta_dev.lock().await.sb_state_sync(*mode).await;
         drop(mode);
         if forward {
             task_state.set_stop(TaskId::PeriodicReplicaFlush);

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use libublk::sys::ublksrv_io_desc;
 use libublk::helpers::IoBuf;
 use smol::channel;
+use smol::lock::Mutex;
 use log::{error, info, debug, trace};
 use crate::state::GlobalTgtState;
 use crate::region::Region;
@@ -220,7 +221,7 @@ pub(crate) struct TgtPendingBlocksPool<T> {
     pub(crate) pending_bytes: usize,
     pub(crate) inflight_bytes: usize, // track inflight bytes logging to replica
     pub(crate) max_capacity: usize,
-    pub(crate) meta_dev: RefCell<MetaDevice>,
+    pub(crate) meta_dev: Mutex<MetaDevice>,
     pub(crate) dev_id: u32,
     pub(crate) g_seq: IncrSeq,
     pub(crate) l_seq: u64,
@@ -276,7 +277,7 @@ impl<T> TgtPendingBlocksPool<T> {
             max_capacity: max_capacity,
             replica_path: replica_path.to_string(),
             replica_device: replica_device,
-            meta_dev: RefCell::new(meta_dev),
+            meta_dev: Mutex::new(meta_dev),
             dev_id,
             g_seq,
             l_seq: 1,
@@ -387,7 +388,7 @@ impl<T> TgtPendingBlocksPool<T> {
             debug!("TgtPendingBlocksPool try log pending - log pending io failed, disable logging");
             state.set_logging_disable();
             let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region, state, inflight_dirty_regions);
-            let res = pool.borrow().meta_dev.borrow().preg_mark_dirty_batch(dirty_regions).await;
+            let res = pool.borrow().meta_dev.lock().await.preg_mark_dirty_batch(dirty_regions).await;
             if res.is_err() {
                 error!("TgtPendingBlocksPool - failed to sync persist region map {:?}", res);
                 // TODO: handle meta device failed case
@@ -518,7 +519,7 @@ impl<T> TgtPendingBlocksPool<T> {
             // logging disabled, log dirty region instead
             if !state.is_logging_enabled() {
                 let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region.clone(), state.clone(), Vec::new());
-                let res = pool.borrow().meta_dev.borrow().preg_mark_dirty_batch(dirty_regions).await;
+                let res = pool.borrow().meta_dev.lock().await.preg_mark_dirty_batch(dirty_regions).await;
                 if res.is_err() {
                     error!("TgtPendingBlocksPool - failed to sync persist region map {:?}", res);
                     // TODO: handle meta device failed case
@@ -535,7 +536,7 @@ impl<T> TgtPendingBlocksPool<T> {
 
                 state.set_logging_disable();
                 let dirty_regions = Self::log_as_dirty_region_in_memory(pool.clone(), region.clone(), state.clone(), Vec::new());
-                let res = pool.borrow().meta_dev.borrow().preg_mark_dirty_batch(dirty_regions).await;
+                let res = pool.borrow().meta_dev.lock().await.preg_mark_dirty_batch(dirty_regions).await;
                 if res.is_err() {
                     error!("TgtPendingBlocksPool - failed to sync persist region map {:?}", res);
                     // TODO: handle meta device failed case
