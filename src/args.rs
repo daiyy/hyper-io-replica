@@ -177,7 +177,7 @@ impl GenAddArgs {
         }
 
         if self.zero_copy {
-            if name != "loop" && name != "null" {
+            if name != "loop" && name != "null" && name != "io-replica" {
                 anyhow::bail!("Target {} doesn't support zero copy", name);
             }
             ctrl_flags |=
