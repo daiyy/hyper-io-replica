@@ -1,9 +1,8 @@
 use args::{AddCommands, Commands};
 use clap::Parser;
-use libublk::{ctrl::UblkCtrl, UblkError, UblkFlags};
-use shared_memory::*;
+use libublk::{ctrl::UblkCtrl, UblkFlags};
 use std::path::Path;
-use std::sync::atomic::{fence, Ordering};
+use std::sync::Arc;
 
 pub(crate) mod target_flags {
     pub const TGT_QUIET: u64 = 0b00000001;
@@ -15,7 +14,6 @@ extern crate nix;
 mod args;
 mod r#loop;
 mod null;
-mod zoned;
 mod io_replica;
 mod pool;
 mod state;
@@ -40,8 +38,18 @@ struct Cli {
     command: Commands,
 }
 
+fn ublk_dump_dev(comm: &Arc<crate::utils::DevIdComm>) -> anyhow::Result<i32> {
+    match comm.recieve_dev_id() {
+        Ok(id) => {
+            UblkCtrl::new_simple(id).unwrap().dump();
+            Ok(0)
+        }
+        _ => Err(anyhow::anyhow!("not recieved device id")),
+    }
+}
+
 /// Wait until control device state is updated to `state`
-fn ublk_state_wait_until(ctrl: &mut UblkCtrl, state: u32, timeout: u32) -> Result<i32, UblkError> {
+fn ublk_state_wait_until(ctrl: &mut UblkCtrl, state: u32, timeout: u32) -> anyhow::Result<i32> {
     let mut count = 0;
     let unit = 100_u32;
     loop {
@@ -53,60 +61,8 @@ fn ublk_state_wait_until(ctrl: &mut UblkCtrl, state: u32, timeout: u32) -> Resul
         }
         count += unit;
         if count >= timeout {
-            return Err(UblkError::OtherError(-libc::ETIME));
+            return Err(anyhow::anyhow!("timeout error"));
         }
-    }
-}
-
-fn rublk_read_id_from_shm(shm_id: &String) -> Result<i32, UblkError> {
-    if let Ok(shmem) = ShmemConf::new().os_id(shm_id).size(4096).open() {
-        let s: &[u8] = unsafe { shmem.as_slice() };
-
-        if s[0] != b'U' || s[1] != b'B' || s[2] != b'L' || s[3] != b'K' {
-            return Err(UblkError::OtherError(-libc::EAGAIN));
-        }
-
-        // order the two READs
-        fence(Ordering::Acquire);
-
-        let ss = String::from_utf8(s[4..8].to_vec()).unwrap();
-        if let Ok(i) = i32::from_str_radix(&ss, 16) {
-            Ok(i)
-        } else {
-            Err(UblkError::OtherError(-libc::EINVAL))
-        }
-    } else {
-        Err(UblkError::OtherError(-libc::EAGAIN))
-    }
-}
-
-fn rublk_wait_and_dump(shm_id: &String) -> Result<i32, UblkError> {
-    let mut count = 0;
-    loop {
-        if count >= 500 {
-            eprintln!("create ublk device failed");
-            return Err(UblkError::OtherError(-libc::EINVAL));
-        }
-        match rublk_read_id_from_shm(shm_id) {
-            Ok(id) => {
-                let ctrl = UblkCtrl::new_simple(id)?;
-
-                if (ctrl.dev_info().ublksrv_flags & target_flags::TGT_QUIET) == 0 {
-                    ctrl.dump();
-                }
-
-                return Ok(0);
-            }
-            Err(UblkError::OtherError(code)) => {
-                if code == -libc::EAGAIN {
-                    count += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                } else {
-                    return Err(UblkError::OtherError(code));
-                }
-            }
-            _ => return Err(UblkError::OtherError(-libc::EINVAL)),
-        };
     }
 }
 
@@ -114,92 +70,108 @@ fn ublk_parse_add_args(opt: &args::AddCommands) -> (&'static str, &args::GenAddA
     match opt {
         AddCommands::Loop(_opt) => ("loop", &_opt.gen_arg),
         AddCommands::Null(_opt) => ("null", &_opt.gen_arg),
-        AddCommands::Zoned(_opt) => ("zoned", &_opt.gen_arg),
         AddCommands::IoReplica(_opt) => ("io-replica", &_opt.gen_arg),
     }
 }
 
-fn ublk_add_worker(opt: args::AddCommands) -> Result<i32, UblkError> {
+fn ublk_add_worker(opt: args::AddCommands, comm: &Arc<crate::utils::DevIdComm>) -> anyhow::Result<i32> {
     let (tgt_type, gen_arg) = ublk_parse_add_args(&opt);
     let ctrl = gen_arg.new_ublk_ctrl(tgt_type, UblkFlags::UBLK_DEV_F_ADD_DEV)?;
 
+    // Validate mlock compatibility early
+    if let Err(e) = gen_arg.validate_mlock_compatibility(tgt_type) {
+        comm.send_dev_id(ctrl.dev_info().dev_id)?;
+        return Err(e);
+    }
+
     match opt {
-        AddCommands::Loop(opt) => r#loop::ublk_add_loop(ctrl, Some(opt)),
-        AddCommands::Null(opt) => null::ublk_add_null(ctrl, Some(opt)),
-        AddCommands::Zoned(opt) => zoned::ublk_add_zoned(ctrl, Some(opt)),
-        AddCommands::IoReplica(opt) => io_replica::ublk_add_io_replica(ctrl, Some(opt)),
+        AddCommands::Loop(opt) => r#loop::ublk_add_loop(ctrl, Some(opt), comm),
+        AddCommands::Null(opt) => null::ublk_add_null(ctrl, Some(opt), comm),
+        AddCommands::IoReplica(opt) => io_replica::ublk_add_io_replica(ctrl, Some(opt), comm),
     }
 }
 
-fn ublk_add(opt: args::AddCommands) -> Result<i32, UblkError> {
+fn ublk_add(opt: args::AddCommands) -> anyhow::Result<i32> {
     let (_, gen_arg) = ublk_parse_add_args(&opt);
+    let comm = Arc::new(crate::utils::DevIdComm::new(gen_arg.foreground).expect("Create eventfd failed"));
     gen_arg.save_start_dir();
 
     if gen_arg.foreground {
-        ublk_add_worker(opt)
+        ublk_add_worker(opt, &comm)
     } else {
         let daemonize = daemonize::Daemonize::new()
-            .stdout(daemonize::Stdio::keep())
-            .stderr(daemonize::Stdio::keep());
+            .stdout(daemonize::Stdio::devnull())
+            .stderr(daemonize::Stdio::devnull());
 
-        gen_arg.generate_shm_id();
-
-        let shm_id = gen_arg.get_shm_id();
-        match ShmemConf::new().os_id(&shm_id).size(4096).create() {
-            Ok(_shm) => match daemonize.execute() {
-                daemonize::Outcome::Child(Ok(_)) => ublk_add_worker(opt),
-                daemonize::Outcome::Parent(Ok(_)) => rublk_wait_and_dump(&shm_id),
-                _ => Err(UblkError::OtherError(-libc::EINVAL)),
+        match daemonize.execute() {
+            daemonize::Outcome::Child(Ok(_)) => match ublk_add_worker(opt, &comm) {
+                Ok(res) => Ok(res),
+                Err(r) => {
+                    comm.write_failure().expect("fail to send failure");
+                    Err(r)
+                }
             },
-            Err(_) => Err(UblkError::OtherError(-libc::EINVAL)),
+            daemonize::Outcome::Parent(Ok(_)) => ublk_dump_dev(&comm),
+            _ => Err(anyhow::anyhow!("daemonize execute failure")),
         }
     }
 }
 
-fn ublk_recover_work(opt: args::UblkArgs) -> Result<i32, UblkError> {
+fn ublk_recover_work(opt: args::UblkArgs) -> anyhow::Result<i32> {
     if opt.number < 0 {
-        return Err(UblkError::OtherError(-libc::EINVAL));
+        return Err(anyhow::anyhow!("invalid device number"));
     }
 
     let ctrl = UblkCtrl::new_simple(opt.number)?;
 
     if (ctrl.dev_info().flags & (libublk::sys::UBLK_F_USER_RECOVERY as u64)) == 0 {
-        return Err(UblkError::OtherError(-libc::EOPNOTSUPP));
+        return Err(anyhow::anyhow!("not set user recovery flag"));
     }
 
     if ctrl.dev_info().state != libublk::sys::UBLK_S_DEV_QUIESCED as u16 {
-        return Err(UblkError::OtherError(-libc::EBUSY));
+        return Err(anyhow::anyhow!("device isn't quiesced"));
     }
 
+    let comm = Arc::new(crate::utils::DevIdComm::new(false).expect("Create eventfd failed"));
     ctrl.start_user_recover()?;
 
     let tgt_type = ctrl.get_target_type_from_json().unwrap();
+
+    // Extract device info and target flags to restore original configuration
+    let dev_info = ctrl.dev_info();
+    let target_flags = dev_info.ublksrv_flags;
+
+    // Restore original dev_flags from high 32 bits of target_flags
+    let stored_dev_flags_bits = (target_flags >> 32) as u32;
+    let recovered_dev_flags =
+        UblkFlags::from_bits_truncate(stored_dev_flags_bits) | UblkFlags::UBLK_DEV_F_RECOVER_DEV;
+
     let ctrl = libublk::ctrl::UblkCtrlBuilder::default()
         .name(&tgt_type.clone())
-        .depth(ctrl.dev_info().queue_depth)
-        .nr_queues(ctrl.dev_info().nr_hw_queues)
-        .id(ctrl.dev_info().dev_id as i32)
+        .depth(dev_info.queue_depth)
+        .nr_queues(dev_info.nr_hw_queues)
+        .id(dev_info.dev_id as i32)
         .ctrl_flags(libublk::sys::UBLK_F_USER_RECOVERY.into())
-        .dev_flags(UblkFlags::UBLK_DEV_F_RECOVER_DEV)
+        .dev_flags(recovered_dev_flags)
         .build()
         .unwrap();
 
     match tgt_type.as_str() {
-        "loop" => r#loop::ublk_add_loop(ctrl, None),
-        "null" => null::ublk_add_null(ctrl, None),
-        "zoned" => zoned::ublk_add_zoned(ctrl, None),
-        &_ => todo!(),
+        "loop" => r#loop::ublk_add_loop(ctrl, None, &comm),
+        "null" => null::ublk_add_null(ctrl, None, &comm),
+        "io-replica" => io_replica::ublk_add_io_replica(ctrl, None, &comm),
+        &_ => Err(anyhow::anyhow!("unsupported target type: {}", tgt_type)),
     }
 }
 
-fn ublk_recover(opt: args::UblkArgs) -> Result<i32, UblkError> {
+fn ublk_recover(opt: args::UblkArgs) -> anyhow::Result<i32> {
     let daemonize = daemonize::Daemonize::new()
-        .stdout(daemonize::Stdio::keep())
-        .stderr(daemonize::Stdio::keep());
+        .stdout(daemonize::Stdio::devnull())
+        .stderr(daemonize::Stdio::devnull());
 
     let id = opt.number;
     if id < 0 {
-        return Err(UblkError::OtherError(-libc::EINVAL));
+        return Err(anyhow::anyhow!("invalid device id"));
     }
 
     match daemonize.execute() {
@@ -213,12 +185,11 @@ fn ublk_recover(opt: args::UblkArgs) -> Result<i32, UblkError> {
             }
             Ok(0)
         }
-        _ => Err(UblkError::OtherError(-libc::EINVAL)),
+        _ => Err(anyhow::anyhow!("daemonize execute failed")),
     }
 }
 
-const NR_FEATURES: usize = 9;
-const FEATURES_TABLE: [&str; NR_FEATURES] = [
+const FEATURES_TABLE: &[&str] = &[
     "ZERO_COPY",
     "COMP_IN_TASK",
     "NEED_GET_DATA",
@@ -228,10 +199,16 @@ const FEATURES_TABLE: [&str; NR_FEATURES] = [
     "CMD_IOCTL_ENCODE",
     "USER_COPY",
     "ZONED",
+    "USER_RECOVERY_FAIL_IO",
+    "UPDATE_SIZE",
+    "AUTO_BUF_REG",
+    "QUIESCE",
+    "PER_IO_DAEMON",
+    "BUF_REG_OFF_DAEMON",
 ];
 
 #[allow(clippy::needless_range_loop)]
-fn ublk_features(_opt: args::UblkFeaturesArgs) -> Result<i32, UblkError> {
+fn ublk_features(_opt: args::UblkFeaturesArgs) -> anyhow::Result<i32> {
     match UblkCtrl::get_features() {
         Some(f) => {
             println!("\t{:<22} {:#12x}", "UBLK FEATURES", f);
@@ -240,7 +217,7 @@ fn ublk_features(_opt: args::UblkFeaturesArgs) -> Result<i32, UblkError> {
                     continue;
                 }
 
-                let feat = if i < NR_FEATURES {
+                let feat = if i < FEATURES_TABLE.len() {
                     FEATURES_TABLE[i]
                 } else {
                     "unknown"
@@ -253,11 +230,14 @@ fn ublk_features(_opt: args::UblkFeaturesArgs) -> Result<i32, UblkError> {
     Ok(0)
 }
 
-fn __ublk_del(id: i32) -> Result<i32, UblkError> {
+fn __ublk_del(id: i32, async_del: bool) -> anyhow::Result<i32> {
     let ctrl = UblkCtrl::new_simple(id)?;
 
-    let _ = ctrl.kill_dev();
-    let _ = ctrl.del_dev();
+    ctrl.kill_dev()?;
+    match async_del {
+        false => ctrl.del_dev()?,
+        true => ctrl.del_dev_async()?,
+    };
 
     let run_path = ctrl.run_path();
     let json_path = std::path::Path::new(&run_path);
@@ -266,34 +246,25 @@ fn __ublk_del(id: i32) -> Result<i32, UblkError> {
     Ok(0)
 }
 
-fn ublk_del(opt: args::DelArgs) -> Result<i32, UblkError> {
+fn ublk_del(opt: args::DelArgs) -> anyhow::Result<i32> {
     log::trace!("ublk del {} {}", opt.number, opt.all);
 
     if !opt.all {
-        __ublk_del(opt.number)?;
+        __ublk_del(opt.number, opt.r#async)?;
 
         return Ok(0);
     }
 
-    if let Ok(entries) = std::fs::read_dir(UblkCtrl::run_dir()) {
-        for entry in entries.flatten() {
-            let f = entry.path();
-            if f.is_file() {
-                if let Some(file_stem) = f.file_stem() {
-                    if let Some(stem) = file_stem.to_str() {
-                        if let Ok(num) = stem.parse::<i32>() {
-                            __ublk_del(num)?;
-                        }
-                    }
-                }
-            }
+    UblkCtrl::for_each_dev_id(move |id| {
+        if let Err(e) = __ublk_del(id.try_into().unwrap(), opt.r#async) {
+            eprintln!("failed to delete ublk device {}: {}", id, e);
         }
-    }
+    });
 
     Ok(0)
 }
 
-fn __ublk_list(id: i32) -> Result<i32, UblkError> {
+fn __ublk_list(id: i32) -> anyhow::Result<i32> {
     match UblkCtrl::new_simple(id) {
         Ok(ctrl) => {
             if ctrl.read_dev_info().is_ok() {
@@ -301,30 +272,22 @@ fn __ublk_list(id: i32) -> Result<i32, UblkError> {
             }
             Ok(0)
         }
-        _ => Err(UblkError::OtherError(-libc::ENODEV)),
+        _ => Err(anyhow::anyhow!("nodev failure")),
     }
 }
 
-fn ublk_list(opt: args::UblkArgs) -> Result<i32, UblkError> {
-    if opt.number > 0 {
-        let _ = __ublk_list(opt.number);
+fn ublk_list(opt: args::UblkArgs) -> anyhow::Result<i32> {
+    if opt.number >= 0 {
+        __ublk_list(opt.number)?;
         return Ok(0);
     }
 
-    if let Ok(entries) = std::fs::read_dir(UblkCtrl::run_dir()) {
-        for entry in entries.flatten() {
-            let f = entry.path();
-            if f.is_file() {
-                if let Some(file_stem) = f.file_stem() {
-                    if let Some(stem) = file_stem.to_str() {
-                        if let Ok(num) = stem.parse::<i32>() {
-                            let _ = __ublk_list(num);
-                        }
-                    }
-                }
-            }
+    UblkCtrl::for_each_dev_id(move |id| {
+        if let Err(e) = __ublk_list(id.try_into().unwrap()) {
+            eprintln!("failed to list ublk device {}: {}", id, e);
         }
-    }
+    });
+
     Ok(0)
 }
 
@@ -332,6 +295,8 @@ fn main() {
     let cli = Cli::parse();
 
     env_logger::builder()
+        .format_target(false)
+        .format_timestamp(None)
         .init();
 
     if !Path::new("/dev/ublk-control").exists() {
@@ -340,7 +305,9 @@ fn main() {
     }
 
     match cli.command {
-        Commands::Add(opt) => ublk_add(opt).unwrap(),
+        Commands::Add(opt) => {
+            ublk_add(opt).expect("Fail to add ublk, pass --foreground for getting detailed error\n")
+        }
         Commands::Del(opt) => ublk_del(opt).unwrap(),
         Commands::List(opt) => ublk_list(opt).unwrap(),
         Commands::Recover(opt) => ublk_recover(opt).unwrap(),

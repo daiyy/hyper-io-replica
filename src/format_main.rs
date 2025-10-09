@@ -14,7 +14,6 @@ extern crate nix;
 mod args;
 mod r#loop;
 mod null;
-mod zoned;
 mod io_replica;
 mod pool;
 mod state;

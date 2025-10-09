@@ -1,6 +1,6 @@
 use io_uring::{opcode, squeue, types};
+use libublk::io::{BufDesc, BufDescList};
 use libublk::io::{UblkDev, UblkIOCtx, UblkQueue};
-use libublk::uring_async::ublk_wait_and_handle_ios;
 use libublk::{ctrl::UblkCtrl, helpers::IoBuf, UblkError, UblkIORes};
 use libublk::sys::ublksrv_io_desc;
 use libublk::uring_async::ublk_wake_task;
@@ -193,26 +193,86 @@ fn __lo_prep_submit_io_cmd(iod: &libublk::sys::ublksrv_io_desc) -> i32 {
 }
 
 #[inline]
-fn __lo_make_io_sqe(op: u32, off: u64, bytes: u32, buf_addr: *mut u8) -> io_uring::squeue::Entry {
+fn lo_fallocate_mode(ublk_op: u32, flags: u32) -> i32 {
+    /* follow logic of linux kernel loop */
+    libc::FALLOC_FL_KEEP_SIZE
+        | if ublk_op == libublk::sys::UBLK_IO_OP_DISCARD {
+            libc::FALLOC_FL_PUNCH_HOLE
+        } else if ublk_op == libublk::sys::UBLK_IO_OP_WRITE_ZEROES {
+            if (flags & libublk::sys::UBLK_IO_F_NOUNMAP) != 0 {
+                libc::FALLOC_FL_ZERO_RANGE
+            } else {
+                libc::FALLOC_FL_PUNCH_HOLE
+            }
+        } else {
+            libc::FALLOC_FL_ZERO_RANGE
+        }
+}
+
+#[inline]
+fn lo_make_discard_sqe(op: u32, flags: u32, off: u64, bytes: u32) -> io_uring::squeue::Entry {
+    let mode = lo_fallocate_mode(op, flags);
+
+    opcode::Fallocate::new(types::Fixed(1), bytes as u64)
+        .offset(off)
+        .mode(mode)
+        .build()
+        .flags(squeue::Flags::FIXED_FILE)
+}
+
+#[inline]
+fn __lo_make_io_sqe_zc(iod: &libublk::sys::ublksrv_io_desc, buf_index: u16,) -> io_uring::squeue::Entry {
+    let op = iod.op_flags & 0xff;
+    let off = iod.start_sector << 9;
+    let bytes = iod.nr_sectors << 9;
+
     match op {
-        libublk::sys::UBLK_IO_OP_FLUSH => opcode::SyncFileRange::new(types::Fixed(1), bytes)
-            .offset(off)
+        libublk::sys::UBLK_IO_OP_FLUSH => opcode::Fsync::new(types::Fixed(1))
             .build()
             .flags(squeue::Flags::FIXED_FILE),
-        libublk::sys::UBLK_IO_OP_READ => opcode::Read::new(types::Fixed(1), buf_addr, bytes)
-            .offset(off)
-            .build()
-            .flags(squeue::Flags::FIXED_FILE),
-        libublk::sys::UBLK_IO_OP_WRITE => opcode::Write::new(types::Fixed(1), buf_addr, bytes)
-            .offset(off)
-            .build()
-            .flags(squeue::Flags::FIXED_FILE),
+        libublk::sys::UBLK_IO_OP_READ => {
+            opcode::ReadFixed::new(types::Fixed(1), std::ptr::null_mut(), bytes, buf_index)
+                .offset(off)
+                .build()
+                .flags(squeue::Flags::FIXED_FILE)
+        }
+        libublk::sys::UBLK_IO_OP_WRITE => {
+            opcode::WriteFixed::new(types::Fixed(1), std::ptr::null(), bytes, buf_index)
+                .offset(off)
+                .build()
+                .flags(squeue::Flags::FIXED_FILE)
+        }
+        libublk::sys::UBLK_IO_OP_DISCARD | libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
+            lo_make_discard_sqe(op, iod.op_flags >> 8, off, bytes)
+        }
         _ => panic!(),
     }
 }
 
 #[inline]
-async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, seq: &IncrSeq) -> i32 {
+fn __lo_make_io_sqe(iod: &libublk::sys::ublksrv_io_desc, buf: Option<&[u8]>,) -> io_uring::squeue::Entry {
+    let op = iod.op_flags & 0xff;
+    let off = iod.start_sector << 9;
+    let bytes = iod.nr_sectors << 9;
+    let buf_addr = buf.map_or(std::ptr::null(), |b| b.as_ptr()) as *mut u8;
+
+    match op {
+        libublk::sys::UBLK_IO_OP_FLUSH => opcode::Fsync::new(types::Fixed(1)).build(),
+        libublk::sys::UBLK_IO_OP_READ => opcode::Read::new(types::Fixed(1), buf_addr, bytes)
+            .offset(off)
+            .build(),
+        libublk::sys::UBLK_IO_OP_WRITE => opcode::Write::new(types::Fixed(1), buf_addr, bytes)
+            .offset(off)
+            .build(),
+        libublk::sys::UBLK_IO_OP_DISCARD | libublk::sys::UBLK_IO_OP_WRITE_ZEROES => {
+            lo_make_discard_sqe(op, iod.op_flags >> 8, off, bytes)
+        }
+        _ => panic!(),
+    }
+}
+
+#[inline]
+async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf: Option<&[u8]>, seq: &IncrSeq) -> i32 {
     let iod = q.get_iod(tag);
     let res = __lo_prep_submit_io_cmd(iod);
     if res < 0 {
@@ -260,8 +320,6 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
     for _ in 0..4 {
         let op = iod.op_flags & 0xff;
         // either start to handle or retry
-        let off = iod.start_sector << 9;
-        let bytes = iod.nr_sectors << 9;
 
         // TODO:
         // since back storage is always "write through"
@@ -276,7 +334,11 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf_addr: *mut u8, 
             }
         }
 
-        let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr);
+        let sqe = if buf.is_none() {
+            __lo_make_io_sqe_zc(iod, tag)
+        } else {
+            __lo_make_io_sqe(iod, buf)
+        };
         let res = q.ublk_submit_sqe(sqe).await;
         if res != -(libc::EAGAIN) {
             match op {
@@ -386,7 +448,8 @@ fn to_absolute_path(p: PathBuf, parent: Option<PathBuf>) -> PathBuf {
 }
 
 // TODO
-fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *mut u8, seq: &IncrSeq) {
+fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf: &[u8], seq: &IncrSeq) -> Result<(), UblkError> {
+    let buf_desc = BufDesc::Slice(buf);
     let iod = q.get_iod(tag);
     let op = iod.op_flags & 0xff;
     let data = UblkIOCtx::build_user_data(tag, op, 0, true);
@@ -405,57 +468,86 @@ fn lo_handle_io_cmd_sync(q: &UblkQueue<'_>, tag: u16, i: &UblkIOCtx, buf_addr: *
                 //UBLK_IO_OP_WRITE | UBLK_IO_OP_WRITE_SAME | UBLK_IO_OP_FLUSH | UBLK_IO_OP_DISCARD | UBLK_IO_OP_WRITE_ZEROES ->
                 #[cfg(feature="piopr")]
                 if region::local_piopr_persist_pending_staging(&iod).is_err() {
-                    q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(-libc::EIO)));
-                    return;
+                    q.complete_io_cmd_unified(tag, buf_desc, Ok(UblkIORes::Result(-libc::EIO)))?;
+                    return Ok(());
                 }
                 pool_append_pending(&iod, seq.next(iod.op_flags), true);
             }
-            q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(res)));
-            return;
+            q.complete_io_cmd_unified(tag, buf_desc, Ok(UblkIORes::Result(res)))?;
+            return Ok(());
         }
     }
 
     let res = __lo_prep_submit_io_cmd(iod);
     if res < 0 {
         debug!("-- complete io due to res: {}", res);
-        q.complete_io_cmd(tag, buf_addr, Ok(UblkIORes::Result(res)));
+        q.complete_io_cmd_unified(tag, buf_desc, Ok(UblkIORes::Result(res)))?;
     } else {
         let op = iod.op_flags & 0xff;
         // either start to handle or retry
         let off = iod.start_sector << 9;
         let bytes = iod.nr_sectors << 9;
-        let sqe = __lo_make_io_sqe(op, off, bytes, buf_addr).user_data(data);
+        let buf_addr = buf.as_ptr() as *mut u8;
+        let sqe = __lo_make_io_sqe(iod, Some(buf)).user_data(data);
         q.ublk_submit_sqe_sync(sqe).unwrap();
         debug!("-> submit target io op: {}, off: {}, bytes: {}, ptr: {:?}", op, off, bytes, buf_addr);
         debug!("   io desc: {:?}", iod);
     }
+    Ok(())
 }
 
-fn new_q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
+fn new_q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) -> Result<(), UblkError> {
     let depth = dev.dev_info.queue_depth;
     let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
-    let exe = smol::LocalExecutor::new();
+    let exe_rc = Rc::new(smol::LocalExecutor::new());
+    let exe = exe_rc.clone();
     let mut f_vec = Vec::new();
+    let q_inflight_rc: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
 
     for tag in 0..depth {
         let q = q_rc.clone();
         let seq = g_seq.clone();
+        let q_inflight = q_inflight_rc.clone();
 
         f_vec.push(exe.spawn(async move {
-            let buf = IoBuf::<u8>::new(q.dev.dev_info.max_io_buf_bytes as usize);
-            let buf_addr = buf.as_mut_ptr();
-            let mut cmd_op = libublk::sys::UBLK_U_IO_FETCH_REQ;
-            let mut res = 0;
+            let buf = if q.support_auto_buf_zc() {
+                None
+            } else {
+                Some(IoBuf::<u8>::new(q.dev.dev_info.max_io_buf_bytes as usize))
+            };
 
-            q.register_io_buf(tag, &buf);
+            let (buf_desc, buf_ref) = match buf {
+                Some(ref io_buf) => (BufDesc::Slice(io_buf.as_slice()), Some(io_buf.as_slice())),
+                None => {
+                    let auto_buf_reg = libublk::sys::ublk_auto_buf_reg {
+                        index: tag,
+                        flags: libublk::sys::UBLK_AUTO_BUF_REG_FALLBACK as u8,
+                        ..Default::default()
+                    };
+                    (BufDesc::AutoReg(auto_buf_reg), None)
+                },
+            };
+
+            // Submit initial prep command
+            match q.submit_io_prep_cmd(tag, buf_desc.clone(), 0, buf.as_ref()).await {
+                Err(UblkError::QueueIsDown) | Ok(_) => {}
+                Err(e) => log::error!("handle_queue_tag_async failed for tag {}: {}", tag, e),
+            }
+
             loop {
-                let cmd_res = q.submit_io_cmd(tag, cmd_op, buf_addr, res).await;
-                if cmd_res == libublk::sys::UBLK_IO_RES_ABORT {
-                    break;
+                {
+                    let mut inflight = q_inflight.borrow_mut();
+                    *inflight += 1;
                 }
-
-                res = lo_handle_io_cmd_async(&q, tag, buf_addr, &seq).await;
-                cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
+                let res = lo_handle_io_cmd_async(&q, tag, buf_ref, &seq).await;
+                {
+                    let mut inflight = q_inflight.borrow_mut();
+                    *inflight -= 1;
+                }
+                match q.submit_io_commit_cmd(tag, buf_desc.clone(), res).await {
+                    Err(UblkError::QueueIsDown) | Ok(_) => {}
+                    Err(e) => log::error!("handle_queue_tag_async failed for tag {}: {}", tag, e),
+                }
             }
         }));
     }
@@ -503,7 +595,7 @@ fn new_q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
         };
         region::local_region_map_sync(region::local_region_take());
         // if still have inflight io, let's keep looping
-        if q_rc.get_inflight_nr_io() > 0 {
+        if *q_inflight_rc.borrow() > 0 {
             to_wait = 0;
         }
         let start = Instant::now();
@@ -520,7 +612,15 @@ fn new_q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
         q_rc.unregister_io_buf(tag);
     }
 
-    smol::block_on(async { futures::future::join_all(f_vec).await });
+    smol::block_on(exe_rc.run(async move {
+        let run_ops = || while exe.try_tick() {};
+        let done = || f_vec.iter().all(|task| task.is_finished());
+
+        if let Err(e) = libublk::wait_and_handle_io_events(&q_rc, Some(20), run_ops, done).await {
+            log::error!("handle_uring_events failed: {}", e);
+        }
+    }));
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -532,20 +632,23 @@ fn q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
         let bufs = bufs_rc.clone();
         let seq = g_seq.clone();
 
-        lo_handle_io_cmd_sync(q, tag, io, bufs[tag as usize].as_mut_ptr(), &seq);
+        if let Err(e) = lo_handle_io_cmd_sync(q, tag, io, &*bufs[tag as usize], &seq) {
+            log::error!("handle_io_cmd failed {}/{}: {}", qid, tag, e);
+        }
     };
 
     UblkQueue::new(qid, dev)
         .unwrap()
-        .regiser_io_bufs(Some(&bufs))
-        .submit_fetch_commands(Some(&bufs))
+        .submit_fetch_commands_unified(BufDescList::Slices(Some(&bufs)))
+        .unwrap()
         .wait_and_handle_io(lo_io_handler);
 }
 
 fn q_a_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
     let depth = dev.dev_info.queue_depth;
     let q_rc = Rc::new(UblkQueue::new(qid, dev).unwrap());
-    let exe = smol::LocalExecutor::new();
+    let exe_rc = Rc::new(smol::LocalExecutor::new());
+    let exe = exe_rc.clone();
     let mut f_vec = Vec::new();
 
     for tag in 0..depth {
@@ -553,29 +656,52 @@ fn q_a_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
         let seq = g_seq.clone();
 
         f_vec.push(exe.spawn(async move {
-            let buf = IoBuf::<u8>::new(q.dev.dev_info.max_io_buf_bytes as usize);
-            let buf_addr = buf.as_mut_ptr();
-            let mut cmd_op = libublk::sys::UBLK_U_IO_FETCH_REQ;
-            let mut res = 0;
+            let buf = if q.support_auto_buf_zc() {
+                None
+            } else {
+                Some(IoBuf::<u8>::new(q.dev.dev_info.max_io_buf_bytes as usize))
+            };
 
-            q.register_io_buf(tag, &buf);
+            let (buf_desc, buf_ref) = match buf {
+                Some(ref io_buf) => (BufDesc::Slice(io_buf.as_slice()), Some(io_buf.as_slice())),
+                None => {
+                    let auto_buf_reg = libublk::sys::ublk_auto_buf_reg {
+                        index: tag,
+                        flags: libublk::sys::UBLK_AUTO_BUF_REG_FALLBACK as u8,
+                        ..Default::default()
+                    };
+                    (BufDesc::AutoReg(auto_buf_reg), None)
+                },
+            };
+
+            // Submit initial prep command
+            match q.submit_io_prep_cmd(tag, buf_desc.clone(), 0, buf.as_ref()).await {
+                Err(UblkError::QueueIsDown) | Ok(_) => {}
+                Err(e) => log::error!("handle_queue_tag_async failed for tag {}: {}", tag, e),
+            }
+
             loop {
-                let cmd_res = q.submit_io_cmd(tag, cmd_op, buf_addr, res).await;
-                if cmd_res == libublk::sys::UBLK_IO_RES_ABORT {
-                    break;
+                let res = lo_handle_io_cmd_async(&q, tag, buf_ref, &seq).await;
+                match q.submit_io_commit_cmd(tag, buf_desc.clone(), res).await {
+                    Err(UblkError::QueueIsDown) | Ok(_) => {}
+                    Err(e) => log::error!("handle_queue_tag_async failed for tag {}: {}", tag, e),
                 }
-
-                res = lo_handle_io_cmd_async(&q, tag, buf_addr, &seq).await;
-                cmd_op = libublk::sys::UBLK_U_IO_COMMIT_AND_FETCH_REQ;
             }
         }));
     }
-    ublk_wait_and_handle_ios(&exe, &q_rc);
-    smol::block_on(async { futures::future::join_all(f_vec).await });
+
+    smol::block_on(exe_rc.run(async move {
+        let run_ops = || while exe.try_tick() {};
+        let done = || f_vec.iter().all(|task| task.is_finished());
+
+        if let Err(e) = libublk::wait_and_handle_io_events(&q_rc, Some(20), run_ops, done).await {
+            log::error!("handle_uring_events failed: {}", e);
+        }
+    }));
 }
 
-pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) -> Result<i32, UblkError> {
-    let (file, unix_sock, dio, ro, aa, _shm, fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz,
+pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, comm_rc: &Arc<crate::utils::DevIdComm>) -> anyhow::Result<i32> {
+    let (file, unix_sock, dio, ro, aa, _fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz,
             pri_dev, force_startup_recover, recover_concurrency) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
@@ -594,7 +720,6 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                 !o.buffered_io,
                 o.gen_arg.read_only,
                 o.async_await,
-                Some(o.gen_arg.get_shm_id()),
                 o.gen_arg.foreground,
                 o.replica.clone(),
                 primary.region_size,
@@ -631,7 +756,6 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.direct_io != 0,
                             (p.basic.attrs & libublk::sys::UBLK_ATTR_READ_ONLY) != 0,
                             t.async_await,
-                            None,
                             false,
                             t.replica_dev_path,
                             t.region_size,
@@ -643,10 +767,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
                             t.force_startup_recover,
                             t.recover_concurrency,
                         )},
-                        Err(_) => return Err(UblkError::OtherError(-libc::EINVAL)),
+                        Err(_) => return Err(anyhow::anyhow!("not get json data")),
                     }
                 }
-                None => return Err(UblkError::OtherError(-libc::EINVAL)),
+                None => return Err(anyhow::anyhow!("not get json data")),
             }
         }
     };
@@ -728,7 +852,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
 
     //todo: USER_COPY should be the default option
     if (ctrl.dev_info().flags & (libublk::sys::UBLK_F_USER_COPY as u64)) != 0 {
-        return Err(UblkError::OtherError(-libc::EINVAL));
+        return Err(anyhow::anyhow!("loop doesn't support user copy"));
     }
 
     let tgt_state = GlobalTgtState::new();
@@ -841,6 +965,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
         info!("kick start up recover mode to FORWARD_PART - primary cno: {primary_cno}, replica cno: {replica_cno}");
     }
 
+    let comm = comm_rc.clone();
     ctrl.run_target(
         |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
         move |qid, dev: &_| if aa {
@@ -871,9 +996,15 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>) ->
             #[cfg(feature="piopr")]
             LOCAL_PIO_PREGION.set(piopr.clone());
 
-            new_q_fn(qid, dev, g_seq)
+            if let Err(e) = new_q_fn(qid, dev, g_seq) {
+                log::error!("Queue handler failed for queue {}: {}", qid, e);
+            }
         },
-        move |ctrl: &UblkCtrl| crate::utils::rublk_prep_dump_dev(_shm, fg, ctrl),
+        move |ctrl: &UblkCtrl| {
+            if let Err(e) = comm.send_dev_id(ctrl.dev_info().dev_id) {
+                log::error!("Failed to send device ID: {}", e);
+            }
+        },
     )
     .unwrap();
 

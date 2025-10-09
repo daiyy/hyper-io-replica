@@ -1,11 +1,9 @@
 use std::os::linux::fs::MetadataExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{fence, Ordering};
 use ilog::IntLog;
 use libublk::ctrl::UblkCtrl;
 use libublk::sys::*;
-use shared_memory::*;
 
 pub(crate) fn is_all_zeros(buf: &[u8]) -> bool {
     let (prefix, aligned, suffix) = unsafe { buf.align_to::<u128>() };
@@ -32,6 +30,74 @@ ioctl_read_bad!(
     request_code_none!(BLK_IOCTL_TYPE, BLKPBSZGET_NR),
     u32
 );
+
+pub(crate) struct DevIdComm {
+    efd: std::os::fd::OwnedFd,
+    dump: bool,
+}
+
+impl DevIdComm {
+    pub fn new(dump: bool) -> anyhow::Result<DevIdComm> {
+        let fd = nix::sys::eventfd::EventFd::from_value_and_flags(
+            0,
+            nix::sys::eventfd::EfdFlags::empty(),
+        )?
+        .into();
+
+        Ok(DevIdComm { efd: fd, dump })
+    }
+
+    pub(crate) fn write_failure(&self) -> anyhow::Result<i32> {
+        let id = i64::MAX;
+        let bytes = id.to_le_bytes();
+
+        match nix::unistd::write(&self.efd, &bytes) {
+            Ok(_) => Ok(0),
+            _ => Err(anyhow::anyhow!("fail to write failure to eventfd")),
+        }
+    }
+
+    pub(crate) fn write_dev_id(&self, dev_id: u32) -> anyhow::Result<i32> {
+        // Can't write 0 to eventfd file, otherwise the read() side may
+        // not be waken up
+        let id = (dev_id + 1) as i64;
+        let bytes = id.to_le_bytes();
+
+        match nix::unistd::write(&self.efd, &bytes) {
+            Ok(_) => Ok(0),
+            _ => Err(anyhow::anyhow!("fail to write dev_id to eventfd")),
+        }
+    }
+
+    pub(crate) fn read_dev_id(&self) -> anyhow::Result<i32> {
+        let mut buffer = [0; 8];
+
+        let bytes_read = nix::unistd::read(&self.efd, &mut buffer)?;
+        if bytes_read == 0 {
+            return Err(anyhow::anyhow!("fail to read dev_id from eventfd"));
+        }
+        let ret = i64::from_le_bytes(buffer);
+        if ret == i64::MAX {
+            return Err(anyhow::anyhow!("Fail to start ublk daemon"));
+        }
+
+        Ok((ret - 1) as i32)
+    }
+
+    pub(crate) fn send_dev_id(&self, id: u32) -> anyhow::Result<()> {
+        if self.dump {
+            UblkCtrl::new_simple(id as i32).unwrap().dump();
+        } else {
+            self.write_dev_id(id).expect("Fail to write efd");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn recieve_dev_id(&self) -> anyhow::Result<i32> {
+        let id = self.read_dev_id()?;
+        Ok(id)
+    }
+}
 
 // return (device size in bytes, bit shift of sector size in bytes, bit shift of physical block (sector) size)
 pub(crate) fn ublk_file_size(f: &std::fs::File) -> anyhow::Result<(u64, u8, u8)> {
@@ -65,46 +131,6 @@ pub(crate) fn ublk_file_size(f: &std::fs::File) -> anyhow::Result<(u64, u8, u8)>
         }
     } else {
         Err(anyhow::anyhow!("no file meta got"))
-    }
-}
-
-/// Write device ID into shared memory, so that parent process can
-/// know this ID info
-///
-/// The 1st 4 char is : 'U' 'B' 'L' 'K', then follows the 4
-/// ID chars which is encoded by hex.
-pub(crate) fn rublk_write_id_into_shm(shm_id: &String, id: u32) {
-    log::info!("shm_id {} id {}", shm_id, id);
-    match ShmemConf::new().os_id(shm_id).size(4096).open() {
-        Ok(mut shmem) => {
-            let s: &mut [u8] = unsafe { shmem.as_slice_mut() };
-
-            let id_str = format!("{:04x}", id);
-            let mut i = 4;
-            for c in id_str.as_bytes() {
-                s[i] = *c;
-                i += 1;
-            }
-
-            // order the two WRITEs
-            fence(Ordering::Release);
-
-            s[0] = b'U';
-            s[1] = b'B';
-            s[2] = b'L';
-            s[3] = b'K';
-        }
-        Err(e) => println!("write id open failed {} {}", shm_id, e),
-    }
-}
-
-pub(crate) fn rublk_prep_dump_dev(shm_id: Option<String>, fg: bool, ctrl: &UblkCtrl) {
-    if !fg {
-        if let Some(shm) = shm_id {
-            rublk_write_id_into_shm(&shm, ctrl.dev_info().dev_id);
-        }
-    } else {
-        ctrl.dump();
     }
 }
 
