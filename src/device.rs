@@ -103,8 +103,10 @@ impl fmt::Display for MetaDeviceDesc {
 impl MetaDeviceDesc {
     pub fn from_primary_device(pri: &PrimaryDevice) -> Self {
         let nr_regions = pri.tgt_device_size / pri.region_size;
+        // region bitmap area size in byte
         let region_map_size = (nr_regions + 8 - 1) / 8;
-        let aligned_region_map_size = (region_map_size + 4096 - 1) >> 11 << 11;
+        // region bitmap area size aligned to 4k
+        let aligned_region_map_size = (region_map_size + 4096 - 1) >> 12 << 12;
         Self {
             device_path: pri.device_path.clone(),
             offset: pri.tgt_device_size,
