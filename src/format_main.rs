@@ -31,6 +31,9 @@ mod mgmt_client;
 mod task;
 mod seq;
 
+const MIN_REGION_SIZE: u64 = 8_388_608; // 8MiB
+const MIN_REGION_SHIFT: u32 = 23;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
@@ -55,17 +58,37 @@ fn main() {
         .open(&cli.file)
         .unwrap();
 
+    // handle raw device
     let (cap, sector_bitshift, pb_bitshift)  = utils::ublk_file_size(&file).unwrap();
     log::info!("Raw device: {}, raw size: {}, sector size: {}, physical block size: {}",
         &cli.file.display(), cap, 1 << sector_bitshift, 1 << pb_bitshift);
+
+    // handle region size
     let input_region_size = cli.region_size.parse::<ByteSize>().expect("unable to parse input region size").0;
-    let input_device_size = cli.device_size.as_ref()
-        .map_or(0, |s| s.parse::<ByteSize>().expect("unable to parse input device size").0);
+    if input_region_size % MIN_REGION_SIZE != 0 {
+        log::warn!("Input region size not aligned to 8MiB, please adjust the size");
+        return;
+    }
+    let checked_region_size = input_region_size >> MIN_REGION_SHIFT << MIN_REGION_SHIFT;
+
+    // handle device size
+    let input_device_size = match cli.device_size {
+        Some(s) => s.parse::<ByteSize>().expect("unable to parse input device size").0,
+        None => {
+            log::warn!("No device size from input, use entire space {}", cap);
+            cap
+        },
+    };
+    let checked_device_size = input_device_size >> pb_bitshift << pb_bitshift;
+
+    // create primary device
     let pri_dev = device::PrimaryDevice::new(
         cli.file.as_path().to_str().expect("invalid input of primary device"),
-        input_device_size,
-        input_region_size
+        checked_device_size,
+        checked_region_size
     );
+
+    // create meta device desc
     let meta_dev_desc = device::MetaDeviceDesc::from_primary_device(&pri_dev);
     let _: Result<()> = smol::block_on(async {
         let fake_uuid = uuid::Uuid::new_v4();
