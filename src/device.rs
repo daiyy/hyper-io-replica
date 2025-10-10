@@ -53,6 +53,7 @@ impl PrimaryDevice {
                 device.capacity, tgt_raw_size);
         }
 
+        // how many bytes we have in last region
         let last_region_bytes = tgt_raw_size % checked_region_size;
         let nr_regions_reserved = if last_region_bytes > 0 && last_region_bytes < MIN_META_REGION_SIZE {
             // if last region don't have enough space
@@ -61,7 +62,9 @@ impl PrimaryDevice {
             1
         };
 
+        // how many regions target device have
         let nr_regions_tgt = nr_regions - nr_regions_reserved;
+        // target device size in bytes
         let tgt_device_size = nr_regions_tgt * checked_region_size;
         Self {
             device_path: dev_path.to_string(),
