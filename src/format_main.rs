@@ -55,7 +55,9 @@ fn main() {
         .open(&cli.file)
         .unwrap();
 
-    let (_cap, _sector_bitshift, _pb_bitshift)  = utils::ublk_file_size(&file).unwrap();
+    let (cap, sector_bitshift, pb_bitshift)  = utils::ublk_file_size(&file).unwrap();
+    log::info!("Raw device: {}, raw size: {}, sector size: {}, physical block size: {}",
+        &cli.file.display(), cap, 1 << sector_bitshift, 1 << pb_bitshift);
     let input_region_size = cli.region_size.parse::<ByteSize>().expect("unable to parse input region size").0;
     let input_device_size = cli.device_size.as_ref()
         .map_or(0, |s| s.parse::<ByteSize>().expect("unable to parse input device size").0);
