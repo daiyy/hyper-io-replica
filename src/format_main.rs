@@ -91,8 +91,9 @@ fn main() {
     // create meta device desc
     let meta_dev_desc = device::MetaDeviceDesc::from_primary_device(&pri_dev);
     let _: Result<()> = smol::block_on(async {
-        let fake_uuid = uuid::Uuid::new_v4();
-        let _ = device::MetaDevice::format(&meta_dev_desc, pri_dev.tgt_device_size, &fake_uuid.as_bytes()).await;
+        // uuid to link with primay and replica device
+        let uuid = uuid::Uuid::new_v4();
+        let _ = device::MetaDevice::format(&meta_dev_desc, pri_dev.tgt_device_size, &uuid.as_bytes()).await;
         Ok(())
     });
 }
