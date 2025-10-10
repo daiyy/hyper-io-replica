@@ -10,7 +10,8 @@ use crate::ondisk::{SuperBlockRaw, FlushLogBlockRaw};
 use crate::region::PersistRegionMap;
 
 const MIN_TARGET_DEVICE_REGIONS: u64 = 2;
-const MIN_META_BLOCK_SIZE: u64 = 32_768;
+// flush log area + prmap + prmap2 + sb
+const MIN_META_REGION_SIZE: u64 = 4096 + 2 * 1024 * 1024 + 2 * 1024 * 1024 + 1024;
 
 #[derive(Clone, Debug)]
 pub struct PrimaryDevice {
@@ -53,7 +54,7 @@ impl PrimaryDevice {
         }
 
         let last_region_bytes = tgt_raw_size % checked_region_size;
-        let nr_regions_reserved = if last_region_bytes > 0 && last_region_bytes < MIN_META_BLOCK_SIZE {
+        let nr_regions_reserved = if last_region_bytes > 0 && last_region_bytes < MIN_META_REGION_SIZE {
             // if last region don't have enough space
             2
         } else {
