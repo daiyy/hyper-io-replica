@@ -84,7 +84,7 @@ impl PrimaryDevice {
 pub struct MetaDeviceDesc {
     pub device_path: String,
     pub offset: u64, // start of meta area, used for flush log
-    pub size: u64,
+    pub size: u64, // total size of metadata area, equal to reserved size
     pub region_map_offset: u64, // offset for dirty region map
     #[cfg(feature="piopr")]
     pub region_map2_offset: u64, // offset for dirty region map2
