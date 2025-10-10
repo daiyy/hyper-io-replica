@@ -152,6 +152,9 @@ impl MetaDevice {
         let mut sb_raw = SuperBlockRaw::default();
         let _ = file.read_exact(sb_raw.as_mut_u8_slice()).await;
 
+        let sb = SuperBlock::from(&sb_raw);
+        sb.verify();
+
         // read flush log
         let _ = file.seek(SeekFrom::Start(desc.offset)).await;
         info!("load flush log from {}", desc.offset);
@@ -170,7 +173,7 @@ impl MetaDevice {
             desc: desc.to_owned(),
             file: file,
             flush_log: FlushLog::from(&fl_raw),
-            sb: SuperBlock::from(&sb_raw),
+            sb: sb,
             preg: preg,
             #[cfg(feature="piopr")]
             preg2: preg2,

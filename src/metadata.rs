@@ -129,6 +129,18 @@ impl SuperBlock {
             raw: *raw,
         }
     }
+
+    pub fn verify(&self) {
+        use std::ffi::CStr;
+
+        let sb_magic = CStr::from_bytes_with_nul(&self.raw.magic).expect("Invalid Super Block Magic");
+        let c_hyperio =  unsafe { CStr::from_bytes_with_nul_unchecked(b"HYPERIO\0") };
+        if sb_magic != c_hyperio {
+            panic!("Invalid Super Block Magic {:?}", sb_magic);
+        }
+
+        // TODO: check checksum
+    }
 }
 
 #[cfg(test)]
