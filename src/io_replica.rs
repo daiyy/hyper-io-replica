@@ -822,14 +822,41 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
             raw_device_sz, replica_device_size);
     }
 
+    // Startup consistency check
+    let mut need_startup_recover = false;
+
+    // load primary and replica cno
     let primary_cno = meta_dev.flush_log.last_entry().cno;
     if primary_cno != replica_cno {
-        warn!("primary cno {} NOT equals to replica cno {}", primary_cno, replica_cno);
-        if !force_startup_recover {
-            warn!(" force_startup_recover is {force_startup_recover}, exit.");
-            return Ok(-libc::EINVAL);
+        warn!("Startup consistency check failed: primary cno {} NOT equals to replica cno {}", primary_cno, replica_cno);
+        need_startup_recover = true;
+    }
+
+    // load and fill in-memory region tracker with persist region
+    let mut v_dirty_regions = meta_dev.preg_load();
+    if v_dirty_regions.len() > 0 {
+        warn!("Startup consistency check: loading persist region from meta device {:?}", v_dirty_regions);
+    }
+    #[cfg(feature="piopr")] {
+        let mut v_dirty_regions2 = meta_dev.preg2_load();
+        if v_dirty_regions2.len() > 0 {
+            warn!("Startup consistency check: loading persist region2 from meta device {:?}", v_dirty_regions2);
         }
-        warn!(" starting recovery process ...");
+        // merge all dirty regions in piopr
+        v_dirty_regions.append(&mut v_dirty_regions2);
+        v_dirty_regions.dedup();
+        v_dirty_regions.sort();
+    }
+    if v_dirty_regions.len() > 0 {
+        warn!("Startup consistency check failed: {} of dirty regions detected on persist area", v_dirty_regions.len());
+        need_startup_recover = true;
+    }
+
+    if need_startup_recover && !force_startup_recover {
+        warn!("Startup consistency check: force_startup_recover is {force_startup_recover}, exit.");
+        return Ok(-libc::EINVAL);
+    } else if need_startup_recover && force_startup_recover {
+        info!("Startup consistency check: starting recovery process ...");
     }
 
     let file_path = format!("{}", file.as_path().display());
@@ -875,32 +902,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
     // check region size with checked one
     assert!(lo.region_size == g_region.region_size());
 
-    #[cfg(feature="piopr")]
-    let piopr = Arc::new(region::PendingIoPersistRegionMap::new(lo.device_size, region_sz, meta_dev.preg.clone(), meta_dev.preg2.clone()));
-
-    // load and fill in-memory region tracker with persist region
-    let mut v_dirty_regions = meta_dev.preg_load();
-    if v_dirty_regions.len() > 0 {
-        warn!("loading persist region from meta device {:?}", v_dirty_regions);
-    }
-    #[cfg(feature="piopr")] {
-        let mut v_dirty_regions2 = meta_dev.preg2_load();
-        if v_dirty_regions2.len() > 0 {
-            warn!("loading persist region2 from meta device {:?}", v_dirty_regions2);
-        }
-        // merge all dirty regions in piopr
-        v_dirty_regions.append(&mut v_dirty_regions2);
-        v_dirty_regions.dedup();
-        v_dirty_regions.sort();
-    }
-    if v_dirty_regions.len() > 0 {
-        warn!("{} of dirty regions detected on persist area", v_dirty_regions.len());
-        if !force_startup_recover {
-            warn!(" force_startup_recover is {force_startup_recover}, exit.");
-            return Ok(-libc::EINVAL);
-        }
-        warn!(" starting recovery process ...");
-    }
+    // mark all dirty regions found
     for region_id in v_dirty_regions.into_iter() {
         g_region.mark_dirty_region_id(region_id);
     }
@@ -929,7 +931,12 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
         client.grace_shutdown();
     }).expect("Failed to set shutdown handler");
 
+    // create global seq
     let g_seq = IncrSeq::new();
+
+    // create piopr
+    #[cfg(feature="piopr")]
+    let piopr = Arc::new(region::PendingIoPersistRegionMap::new(lo.device_size, region_sz, meta_dev.preg.clone(), meta_dev.preg2.clone()));
 
     // create a task state tracker
     let task_state = TaskState::new();
