@@ -99,6 +99,9 @@ impl SuperBlockRaw {
     }
 }
 
+// format: FLUSH_LOG_ENTRY_COLOR | group id << 8 | entry id
+pub(crate) const FLUSH_LOG_ENTRY_COLOR: u64 = 0xAABB_CCFF_0000_0000;
+
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, align(8))]
 pub struct FlushEntryRaw {
@@ -187,6 +190,16 @@ impl fmt::Display for FlushLogBlockRaw {
 }
 
 impl FlushLogBlockRaw {
+    pub fn init() -> Self {
+        let mut s = Self::default();
+        for group_id in 0..=1 {
+            for (entry_id, entry) in s.log_group[group_id].0.iter_mut().enumerate() {
+                entry.padding = FLUSH_LOG_ENTRY_COLOR | (group_id as u64) << 8 | entry_id as u64;
+            }
+        }
+        s
+    }
+
     pub fn as_mut_u8_slice(&mut self) -> &mut [u8] {
         unsafe {
             std::slice::from_raw_parts_mut(

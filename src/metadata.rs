@@ -111,17 +111,15 @@ impl FlushLog {
     }
 
     pub fn verify(&self) {
-        // verify each entry by check field padding is 0
-        self.raw.log_group[0].0.iter().for_each(|entry| {
-            if entry.padding != 0 {
-                panic!("Invalid Flush Log Entry Found");
+        // verify each entry by check if field padding is colored
+        for group_id in 0..=1 {
+            for (entry_id, entry) in self.raw.log_group[group_id].0.iter().enumerate() {
+                let calc = FLUSH_LOG_ENTRY_COLOR | (group_id as u64) << 8 | entry_id as u64;
+                if entry.padding != calc {
+                    panic!("Invalid Color of Flush Log Entry Found");
+                }
             }
-        });
-        self.raw.log_group[1].0.iter().for_each(|entry| {
-            if entry.padding != 0 {
-                panic!("Invalid Flush Log Entry Found");
-            }
-        });
+        }
     }
 }
 

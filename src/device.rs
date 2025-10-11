@@ -195,7 +195,7 @@ impl MetaDevice {
             .unwrap_or_else(|_| panic!("failed to open meta device {dev_path}"));
 
         // init flush log
-        let fl_raw = FlushLogBlockRaw::default();
+        let fl_raw = FlushLogBlockRaw::init();
 
         // init sb
         let mut sb_raw = SuperBlockRaw::default();
