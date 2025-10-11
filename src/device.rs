@@ -136,7 +136,7 @@ pub struct MetaDevice {
 }
 
 impl MetaDevice {
-    pub async fn open(desc: &MetaDeviceDesc) -> Self {
+    pub async fn open(desc: &MetaDeviceDesc, uuid: &str) -> Self {
         let dev_path = &desc.device_path;
         let mut file = OpenOptions::new()
             .read(true)
@@ -153,7 +153,7 @@ impl MetaDevice {
         let _ = file.read_exact(sb_raw.as_mut_u8_slice()).await;
 
         let sb = SuperBlock::from(&sb_raw);
-        sb.verify();
+        sb.verify(uuid);
 
         // read flush log
         let _ = file.seek(SeekFrom::Start(desc.offset)).await;

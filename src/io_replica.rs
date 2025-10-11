@@ -80,6 +80,10 @@ pub struct IoReplicaArgs {
     /// recover concurrency
     #[clap(long, default_value_t = 1)]
     pub recover_concurrency: usize,
+
+    /// device UUID
+    #[clap(long)]
+    pub uuid: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,6 +100,7 @@ struct LoJson {
     raw_device_size: u64,
     force_startup_recover: bool,
     recover_concurrency: usize,
+    uuid: String,
 }
 
 pub(crate) struct LoopTgt {
@@ -114,6 +119,7 @@ pub(crate) struct LoopTgt {
     pub primary_device: device::PrimaryDevice,
     pub force_startup_recover: bool,
     pub recover_concurrency: usize,
+    pub uuid: String,
 }
 
 std::thread_local! {
@@ -430,7 +436,7 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, force_startup_recover: lo.force_startup_recover, recover_concurrency: lo.recover_concurrency, } });
+    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, force_startup_recover: lo.force_startup_recover, recover_concurrency: lo.recover_concurrency, uuid: lo.uuid.clone() } });
     dev.set_target_json(val);
 
     Ok(())
@@ -702,7 +708,7 @@ fn q_a_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) {
 
 pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, comm_rc: &Arc<crate::utils::DevIdComm>) -> anyhow::Result<i32> {
     let (file, unix_sock, dio, ro, aa, _fg, replica, region_sz, pool_sz, local_pool_sz, device_sz, raw_device_sz,
-            pri_dev, force_startup_recover, recover_concurrency) = match opt {
+            pri_dev, force_startup_recover, recover_concurrency, uuid) = match opt {
         Some(ref o) => {
             let parent = o.gen_arg.get_start_dir();
 
@@ -730,6 +736,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
                 primary,
                 o.force_startup_recover,
                 o.recover_concurrency,
+                o.uuid.clone(),
             )
         }
         None => {
@@ -766,6 +773,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
                             primary,
                             t.force_startup_recover,
                             t.recover_concurrency,
+                            t.uuid,
                         )},
                         Err(_) => return Err(anyhow::anyhow!("not get json data")),
                     }
@@ -780,7 +788,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
     info!("{}", meta_dev_desc);
     // open meta device for consistency check
     let mut meta_dev = smol::block_on(async {
-        MetaDevice::open(&meta_dev_desc).await
+        MetaDevice::open(&meta_dev_desc, &uuid).await
     });
     info!("Metadata device opened successfully");
     info!("{}", meta_dev.sb);
@@ -848,6 +856,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
         primary_device: pri_dev,
         force_startup_recover: force_startup_recover,
         recover_concurrency: recover_concurrency,
+        uuid: uuid,
     };
 
     //todo: USER_COPY should be the default option

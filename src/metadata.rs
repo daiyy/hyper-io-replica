@@ -142,13 +142,21 @@ impl SuperBlock {
         }
     }
 
-    pub fn verify(&self) {
+    pub fn verify(&self, uuid: &str) {
         use std::ffi::CStr;
+        use std::str::FromStr;
+        use uuid::Uuid;
 
         let sb_magic = CStr::from_bytes_with_nul(&self.raw.magic).expect("Invalid Super Block Magic");
         let c_hyperio =  unsafe { CStr::from_bytes_with_nul_unchecked(b"HYPERIO\0") };
         if sb_magic != c_hyperio {
             panic!("Invalid Super Block Magic {:?}", sb_magic);
+        }
+
+        let sb_uuid = Uuid::from_slice(&self.raw.replica_dev_uuid).expect("Invalid Super Block - Failed to decode ondisk UUID");
+        let input_uuid = Uuid::from_str(uuid).expect("Invalid Super Block - Invalid user input UUID");
+        if input_uuid != sb_uuid {
+            panic!("Invalid Super Block - Unmatched UUID, user input: {}, ondisk: {}", input_uuid, sb_uuid);
         }
 
         // TODO: check checksum
