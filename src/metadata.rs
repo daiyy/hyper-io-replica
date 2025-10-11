@@ -109,6 +109,20 @@ impl FlushLog {
         let index = 7;
         &self.raw.log_group[sib_group].0[index]
     }
+
+    pub fn verify(&self) {
+        // verify each entry by check field padding is 0
+        self.raw.log_group[0].0.iter().for_each(|entry| {
+            if entry.padding != 0 {
+                panic!("Invalid Flush Log Entry Found");
+            }
+        });
+        self.raw.log_group[1].0.iter().for_each(|entry| {
+            if entry.padding != 0 {
+                panic!("Invalid Flush Log Entry Found");
+            }
+        });
+    }
 }
 
 #[derive(Debug, Default)]

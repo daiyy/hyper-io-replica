@@ -161,6 +161,9 @@ impl MetaDevice {
         let mut fl_raw = FlushLogBlockRaw::default();
         let _ = file.read_exact(fl_raw.as_mut_u8_slice()).await;
 
+        let flush_log = FlushLog::from(&fl_raw);
+        flush_log.verify();
+
         assert!(sb_raw.persist_region_map_offset == desc.region_map_offset);
         assert!(sb_raw.persist_region_map_size == desc.region_map_size);
         let preg = PersistRegionMap::open(&dev_path, desc.region_map_offset, desc.region_map_size).await.expect("failed to open persist region map on meta area");
@@ -172,7 +175,7 @@ impl MetaDevice {
         Self {
             desc: desc.to_owned(),
             file: file,
-            flush_log: FlushLog::from(&fl_raw),
+            flush_log: flush_log,
             sb: sb,
             preg: preg,
             #[cfg(feature="piopr")]
