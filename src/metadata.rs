@@ -153,8 +153,8 @@ impl SuperBlock {
             panic!("Invalid Super Block Magic {:?}", sb_magic);
         }
 
-        let sb_uuid = Uuid::from_slice(&self.raw.replica_dev_uuid).expect("Invalid Super Block - Failed to decode ondisk UUID");
-        let input_uuid = Uuid::from_str(uuid).expect("Invalid Super Block - Invalid user input UUID");
+        let sb_uuid = Uuid::from_slice(&self.raw.dev_uuid).expect("Invalid Super Block - Failed to decode ondisk dev UUID");
+        let input_uuid = Uuid::from_str(uuid).expect("Invalid Super Block - Invalid user input dev UUID");
         if input_uuid != sb_uuid {
             panic!("Invalid Super Block - Unmatched UUID, user input: {}, ondisk: {}", input_uuid, sb_uuid);
         }

@@ -18,7 +18,7 @@ pub struct SuperBlockRaw {
     pub state_timestamp: u64,
     pub last_state: u64,
     pub last_cno: u64,
-    pub replica_dev_uuid: [u8; 16],
+    pub dev_uuid: [u8; 16],
     padding: [u64; 48],
 }
 
@@ -35,14 +35,14 @@ impl fmt::Display for SuperBlockRaw {
                 .unwrap_or(
                     Cow::Borrowed("Invalid SuperBlock Magic")
                 );
-        let replica_uuid = Uuid::from_slice(&self.replica_dev_uuid).unwrap();
+        let dev_uuid = Uuid::from_slice(&self.dev_uuid).unwrap();
 
         let create = time::OffsetDateTime::from_unix_timestamp(self.creation_timestamp as i64).unwrap();
         let startup = time::OffsetDateTime::from_unix_timestamp(self.startup_timestamp as i64).unwrap();
         let shutdown = time::OffsetDateTime::from_unix_timestamp(self.shutdown_timestamp as i64).unwrap();
         let state = time::OffsetDateTime::from_unix_timestamp(self.state_timestamp as i64).unwrap();
 
-        writeln!(f, "  magic: {}, replica: {}", &magic, replica_uuid)?;
+        writeln!(f, "  magic: {}, dev UUID: {}", &magic, dev_uuid)?;
         writeln!(f, "  checksum: {:x}, last cno: {}", self.checksum, self.last_cno)?;
         writeln!(f, "  allocated_size: {}, reserved_size: {}, metadata_offset: {}",
             self.allocated_size, self.reserved_size, self.metadata_offset)?;
@@ -73,7 +73,7 @@ impl Default for SuperBlockRaw {
             state_timestamp: 0,
             last_state: 0,
             last_cno: 0,
-            replica_dev_uuid: [0u8; 16],
+            dev_uuid: [0u8; 16],
             padding: [0u64; 48],
         }
     }

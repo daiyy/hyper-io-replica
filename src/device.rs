@@ -184,7 +184,7 @@ impl MetaDevice {
     }
 
     #[allow(dead_code)]
-    pub async fn format(desc: &MetaDeviceDesc, primary_size: u64, replica_uuid: &[u8; 16]) -> Result<()> {
+    pub async fn format(desc: &MetaDeviceDesc, primary_size: u64, uuid: &[u8; 16]) -> Result<()> {
         let dev_path = &desc.device_path;
         let mut file = OpenOptions::new()
             .read(true)
@@ -208,7 +208,7 @@ impl MetaDevice {
             sb_raw.persist_region_map2_offset = desc.region_map2_offset;
         }
         sb_raw.persist_region_map_size = desc.region_map_size;
-        sb_raw.replica_dev_uuid = replica_uuid.to_owned();
+        sb_raw.dev_uuid = uuid.to_owned();
         let now = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
