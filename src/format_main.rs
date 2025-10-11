@@ -90,10 +90,14 @@ fn main() {
 
     // create meta device desc
     let meta_dev_desc = device::MetaDeviceDesc::from_primary_device(&pri_dev);
-    let _: Result<()> = smol::block_on(async {
+    let res: Result<uuid::Uuid> = smol::block_on(async {
         // uuid to link with primay and replica device
         let uuid = uuid::Uuid::new_v4();
-        let _ = device::MetaDevice::format(&meta_dev_desc, pri_dev.tgt_device_size, &uuid.as_bytes()).await;
-        Ok(())
+        device::MetaDevice::format(&meta_dev_desc, pri_dev.tgt_device_size, &uuid.as_bytes()).await.map(|_| uuid)
     });
+
+    match res {
+        Ok(uuid) => println!("io-replica format success, device uuid: {:?}", uuid),
+        Err(e) => println!("io-replica format failed, err: {}", e),
+    }
 }

@@ -184,7 +184,7 @@ impl MetaDevice {
     }
 
     #[allow(dead_code)]
-    pub async fn format(desc: &MetaDeviceDesc, primary_size: u64, replica_uuid: &[u8; 16]) {
+    pub async fn format(desc: &MetaDeviceDesc, primary_size: u64, replica_uuid: &[u8; 16]) -> Result<()> {
         let dev_path = &desc.device_path;
         let mut file = OpenOptions::new()
             .read(true)
@@ -219,28 +219,29 @@ impl MetaDevice {
         let mut zero = Vec::with_capacity(desc.region_map_size as usize);
         zero.resize(desc.region_map_size as usize, 0);
         info!("format persist region map at {}", desc.region_map_offset);
-        let _ = file.seek(SeekFrom::Start(desc.region_map_offset)).await;
-        let res = file.write(&zero).await;
+        let _ = file.seek(SeekFrom::Start(desc.region_map_offset)).await?;
+        let res = file.write(&zero).await?;
         info!("flush persist region map res: {:?}", res);
 
         #[cfg(feature="piopr")]
         {
             info!("format persist region map2 at {}", desc.region_map2_offset);
-            let _ = file.seek(SeekFrom::Start(desc.region_map2_offset)).await;
-            let res = file.write(&zero).await;
+            let _ = file.seek(SeekFrom::Start(desc.region_map2_offset)).await?;
+            let res = file.write(&zero).await?;
             info!("flush persist region map2 res: {:?}", res);
         }
 
         info!("write flush log at {}", desc.offset);
-        let _ = file.seek(SeekFrom::Start(desc.offset)).await;
-        let res = file.write(fl_raw.as_u8_slice()).await;
+        let _ = file.seek(SeekFrom::Start(desc.offset)).await?;
+        let res = file.write(fl_raw.as_u8_slice()).await?;
         info!("flush log write res: {:?}", res);
 
         info!("write super block at {}", desc.sb_offset);
         info!("{}", sb_raw);
-        let _ = file.seek(SeekFrom::Start(desc.sb_offset)).await;
-        let res = file.write(sb_raw.as_u8_slice()).await;
+        let _ = file.seek(SeekFrom::Start(desc.sb_offset)).await?;
+        let res = file.write(sb_raw.as_u8_slice()).await?;
         info!("super block write res: {:?}", res);
+        Ok(())
     }
 
     pub async fn flush_log_sync(&mut self, id: u64) {
