@@ -87,7 +87,7 @@ pub struct IoReplicaArgs {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct LoJson {
+struct IoRepJson {
     back_file_path: String,
     unix_sock_path: String,
     direct_io: i32,
@@ -103,7 +103,7 @@ struct LoJson {
     uuid: String,
 }
 
-pub(crate) struct LoopTgt {
+pub(crate) struct IoRepTgt {
     pub back_file_path: String,
     pub back_file: std::fs::File,
     pub unix_sock_path: String,
@@ -385,27 +385,27 @@ async fn lo_handle_io_cmd_async(q: &UblkQueue<'_>, tag: u16, buf: Option<&[u8]>,
     -libc::EAGAIN
 }
 
-fn lo_init_tgt(
+fn iorep_init_tgt(
     dev: &mut UblkDev,
-    lo: &LoopTgt,
+    iorep: &IoRepTgt,
     opt: Option<IoReplicaArgs>,
     dio: bool,
 ) -> Result<(), UblkError> {
-    trace!("loop: init_tgt {}", dev.dev_info.dev_id);
+    trace!("io-replica: init_tgt {}", dev.dev_info.dev_id);
     let info = dev.dev_info;
 
-    if lo.direct_io != 0 {
+    if iorep.direct_io != 0 {
         unsafe {
-            libc::fcntl(lo.back_file.as_raw_fd(), libc::F_SETFL, libc::O_DIRECT);
+            libc::fcntl(iorep.back_file.as_raw_fd(), libc::F_SETFL, libc::O_DIRECT);
         }
     }
 
     let tgt = &mut dev.tgt;
     let nr_fds = tgt.nr_fds;
-    tgt.fds[nr_fds as usize] = lo.back_file.as_raw_fd();
+    tgt.fds[nr_fds as usize] = iorep.back_file.as_raw_fd();
     tgt.nr_fds = nr_fds + 1;
 
-    let sz = utils::ublk_file_size(&lo.back_file).unwrap();
+    let sz = utils::ublk_file_size(&iorep.back_file).unwrap();
     let attrs = if dio {
         0
     } else {
@@ -413,7 +413,7 @@ fn lo_init_tgt(
     };
 
     // use device from tgt instead from back file
-    tgt.dev_size = lo.device_size;
+    tgt.dev_size = iorep.device_size;
     //todo: figure out correct block size
     tgt.params = libublk::sys::ublk_params {
         types: libublk::sys::UBLK_PARAM_TYPE_BASIC,
@@ -425,7 +425,7 @@ fn lo_init_tgt(
             io_min_shift: sz.1,
             max_sectors: info.max_io_buf_bytes >> 9,
             dev_sectors: tgt.dev_size >> 9,
-            chunk_sectors: lo.region_size as u32 >> 9,
+            chunk_sectors: iorep.region_size as u32 >> 9,
             ..Default::default()
         },
         ..Default::default()
@@ -436,7 +436,23 @@ fn lo_init_tgt(
         o.gen_arg.apply_read_only(dev);
     }
 
-    let val = serde_json::json!({"loop": LoJson { back_file_path: lo.back_file_path.clone(), unix_sock_path: lo.unix_sock_path.clone(), direct_io: lo.direct_io, async_await:lo.async_await, replica_dev_path: lo.replica_dev_path.clone(), region_size: lo.region_size, pool_size: lo.pool_size, local_pool_size: lo.local_pool_size, device_size: lo.device_size, raw_device_size: lo.raw_device_size, force_startup_recover: lo.force_startup_recover, recover_concurrency: lo.recover_concurrency, uuid: lo.uuid.clone() } });
+    let val = serde_json::json!({
+        "iorep": IoRepJson {
+            back_file_path: iorep.back_file_path.clone(),
+            unix_sock_path: iorep.unix_sock_path.clone(),
+            direct_io: iorep.direct_io,
+            async_await: iorep.async_await,
+            replica_dev_path: iorep.replica_dev_path.clone(),
+            region_size: iorep.region_size,
+            pool_size: iorep.pool_size,
+            local_pool_size: iorep.local_pool_size,
+            device_size: iorep.device_size,
+            raw_device_size: iorep.raw_device_size,
+            force_startup_recover: iorep.force_startup_recover,
+            recover_concurrency: iorep.recover_concurrency,
+            uuid: iorep.uuid.clone()
+        }
+    });
     dev.set_target_json(val);
 
     Ok(())
@@ -745,8 +761,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
 
             match ctrl.get_target_data_from_json() {
                 Some(val) => {
-                    let lo = &val["loop"];
-                    let tgt_data: Result<LoJson, _> = serde_json::from_value(lo.clone());
+                    let iorep = &val["iorep"];
+                    let tgt_data: Result<IoRepJson, _> = serde_json::from_value(iorep.clone());
 
                     match tgt_data {
                         Ok(t) => {
@@ -864,7 +880,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
     if unix_sock.as_path().exists() {
         panic!("unix socket {} is alread exists", sock_path);
     }
-    let lo = LoopTgt {
+    let iorep = IoRepTgt {
         back_file: std::fs::OpenOptions::new()
             .read(true)
             .write(!ro)
@@ -888,7 +904,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
 
     //todo: USER_COPY should be the default option
     if (ctrl.dev_info().flags & (libublk::sys::UBLK_F_USER_COPY as u64)) != 0 {
-        return Err(anyhow::anyhow!("loop doesn't support user copy"));
+        return Err(anyhow::anyhow!("io-replica doesn't support user copy"));
     }
 
     let tgt_state = GlobalTgtState::new();
@@ -897,10 +913,10 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
         meta_dev.sb_state_sync(tgt_state.get_raw()).await;
     });
 
-    let g_region = region::Region::new(lo.device_size, region_sz);
+    let g_region = region::Region::new(iorep.device_size, region_sz);
 
     // check region size with checked one
-    assert!(lo.region_size == g_region.region_size());
+    assert!(iorep.region_size == g_region.region_size());
 
     // mark all dirty regions found
     for region_id in v_dirty_regions.into_iter() {
@@ -936,7 +952,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
 
     // create piopr
     #[cfg(feature="piopr")]
-    let piopr = Arc::new(region::PendingIoPersistRegionMap::new(lo.device_size, region_sz, meta_dev.preg.clone(), meta_dev.preg2.clone()));
+    let piopr = Arc::new(region::PendingIoPersistRegionMap::new(iorep.device_size, region_sz, meta_dev.preg.clone(), meta_dev.preg2.clone()));
 
     // create a task state tracker
     let task_state = TaskState::new();
@@ -983,7 +999,7 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
 
     let comm = comm_rc.clone();
     ctrl.run_target(
-        |dev: &mut UblkDev| lo_init_tgt(dev, &lo, opt, dio),
+        |dev: &mut UblkDev| iorep_init_tgt(dev, &iorep, opt, dio),
         move |qid, dev: &_| if aa {
             q_a_fn(qid, dev, g_seq)
         } else {
