@@ -8,9 +8,6 @@ pub(crate) mod target_flags {
     pub const TGT_QUIET: u64 = 0b00000001;
 }
 
-#[macro_use]
-extern crate nix;
-
 mod args;
 mod r#loop;
 mod null;

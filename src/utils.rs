@@ -19,15 +19,15 @@ const BLKGETSIZE64_NR: u8 = 114;
 const BLKSSZGET_NR: u8 = 104;
 const BLKPBSZGET_NR: u8 = 123;
 
-ioctl_read!(ioctl_blkgetsize64, BLK_IOCTL_TYPE, BLKGETSIZE64_NR, u64);
-ioctl_read_bad!(
+nix::ioctl_read!(ioctl_blkgetsize64, BLK_IOCTL_TYPE, BLKGETSIZE64_NR, u64);
+nix::ioctl_read_bad!(
     ioctl_blksszget,
-    request_code_none!(BLK_IOCTL_TYPE, BLKSSZGET_NR),
+    nix::request_code_none!(BLK_IOCTL_TYPE, BLKSSZGET_NR),
     i32
 );
-ioctl_read_bad!(
+nix::ioctl_read_bad!(
     ioctl_blkpbszget,
-    request_code_none!(BLK_IOCTL_TYPE, BLKPBSZGET_NR),
+    nix::request_code_none!(BLK_IOCTL_TYPE, BLKPBSZGET_NR),
     u32
 );
 
