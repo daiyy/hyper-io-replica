@@ -35,11 +35,14 @@ const MIN_REGION_SHIFT: u32 = 23;
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
+    /// backing file path of primary device
     #[arg(long, short = 'f')]
     pub file: PathBuf,
+
     /// device size, default is entire primary space
     #[clap(long)]
     pub device_size: Option<String>,
+
     /// region size
     #[clap(long, default_value = "8MiB")]
     pub region_size: String,
