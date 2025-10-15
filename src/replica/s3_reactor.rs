@@ -163,7 +163,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
                     .unwrap()
             );
             let spawner = LocalSpawner::new_current();
-            let (hyper, stat) = smol::block_on(async {
+            let (hyper, stat) = rt.block_on(async {
                 let config = aws_config::load_from_env().await;
                 let client = aws_sdk_s3::Client::new(&config);
                 let _ = s3uri;
@@ -182,10 +182,8 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             });
             let (tx, rx) = oneshot::channel();
             spawner.spawn(hyper, tx);
-            let fh = smol::block_on(async {
-                rt.block_on(async {
-                    rx.await.expect("failed to get back file handler")
-                })
+            let fh = rt.block_on(async {
+                rx.await.expect("failed to get back file handler")
             });
             return Self {
                 device_path: dev_path.to_string(),
