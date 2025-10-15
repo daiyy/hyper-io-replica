@@ -32,7 +32,7 @@ impl<'a: 'static> S3Replica<'a> {
                 let mut runtime_config = HyperFileRuntimeConfig::default_large();
                 // disable hyper file internal max flush interval threshold
                 runtime_config.data_cache_dirty_max_flush_interval = u64::MAX;
-                let mut hyper = Hyper::fs_open_opt(&client, dev_path, flags, &runtime_config).await.expect("failed to open hyper file");
+                let hyper = Hyper::fs_open_opt(&client, dev_path, flags, &runtime_config).await.expect("failed to open hyper file");
                 let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
                 (hyper, stat)
             });
@@ -183,7 +183,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
     }
 
     async fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> Result<u64> {
-        let mut bytes = 0;
+        let mut _bytes = 0;
         self.state.set_logging();
         for io in pending.into_iter() {
             if io.size() == 0 {
@@ -192,7 +192,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             }
             let offset = io.offset();
             let buf = io.as_ref();
-            bytes += io.data_size();
+            _bytes += io.data_size();
             self.write(offset, buf).await.expect("unable to write replica deivce");
         }
         let segid = if flush {
