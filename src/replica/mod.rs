@@ -92,9 +92,11 @@ impl ReplicaState {
 }
 
 pub trait Replica: Sized + Send {
-    fn new(dev_path: &str) -> impl std::future::Future<Output = Self>;
+    #[allow(dead_code)]
+    fn create(dev_path: &str, tgt_dev_size: u64, param1: usize, param2: usize) -> impl std::future::Future<Output = Self>;
+    fn open(dev_path: &str) -> impl std::future::Future<Output = Self>;
+    fn set_state_opened(&self);
     fn dup(&self) -> impl std::future::Future<Output = Self>;
-    fn open(&self);
     fn size(&self) -> u64;
     fn read(&self, offset: u64, buf: &mut [u8]) -> impl Future<Output = Result<usize>> + Send;
     fn write(&self, offset: u64, buf: &[u8]) -> impl Future<Output = Result<usize>> + Send;
@@ -104,4 +106,5 @@ pub trait Replica: Sized + Send {
     fn log_pending_io(&self, pending: Vec<PendingIo>, flush: bool) -> impl Future<Output = Result<u64>>;
     fn last_cno(&self) -> impl Future<Output = u64>;
     fn is_active(&self) -> bool;
+    fn uuid(&self) -> u128;
 }
