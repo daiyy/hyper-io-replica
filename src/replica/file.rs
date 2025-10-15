@@ -9,15 +9,19 @@ pub struct FileReplica {
 }
 
 impl Replica for FileReplica {
-    async fn new(_dev_path: &str) -> Self {
+    async fn create(_dev_path: &str, _dev_size: u64, _param1: usize, _param2: usize) -> Self {
+        todo!();
+    }
+
+    async fn open(_dev_path: &str) -> Self {
+        todo!();
+    }
+
+    fn set_state_opened(&self) {
         todo!();
     }
 
     async fn dup(&self) -> Self {
-        todo!();
-    }
-
-    fn open(&self) {
         todo!();
     }
 
@@ -55,6 +59,10 @@ impl Replica for FileReplica {
     }
 
     fn is_active(&self) -> bool {
+        todo!();
+    }
+
+    fn uuid(&self) -> u128 {
         todo!();
     }
 }

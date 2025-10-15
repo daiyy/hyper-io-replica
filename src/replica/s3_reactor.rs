@@ -11,7 +11,9 @@ use hyperfile::s3uri::S3Uri;
 use hyperfile::file::hyper::Hyper;
 use hyperfile::file::flags::FileFlags;
 use hyperfile::file::handler::FileContext;
-use hyperfile::config::HyperFileRuntimeConfig;
+use hyperfile::file::mode::FileMode;
+use hyperfile::meta_format::BlockPtrFormat;
+use hyperfile::config::{HyperFileRuntimeConfig, HyperFileMetaConfig};
 #[cfg(feature="pio-write-batch")]
 use hyperfile::buffer::AlignedDataBlockWrapper;
 
@@ -25,7 +27,7 @@ pub struct S3Replica<'a> {
 }
 
 impl<'a: 'static> S3Replica<'a> {
-    pub fn init(dev_path: &str) -> Self {
+    fn do_open(dev_path: &str) -> Self {
         if let Ok(s3uri) = S3Uri::parse(dev_path) {
             // a tokio mt runtime, the place spawn_read/spawn_write of hyperfile task will run
             let rt = Arc::new(
@@ -151,9 +153,59 @@ impl<'a: 'static> S3Replica<'a> {
 }
 
 impl<'a: 'static> Replica for S3Replica<'a> {
-    async fn new(dev_path: &str) -> Self {
+    async fn create(dev_path: &str, dev_size: u64, meta_block_size: usize, data_block_size: usize) -> Self {
+        if let Ok(s3uri) = S3Uri::parse(dev_path) {
+            // a tokio mt runtime, the place spawn_read/spawn_write of hyperfile task will run
+            let rt = Arc::new(
+                runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+            );
+            let spawner = LocalSpawner::new_current();
+            let (hyper, stat) = smol::block_on(async {
+                let config = aws_config::load_from_env().await;
+                let client = aws_sdk_s3::Client::new(&config);
+                let _ = s3uri;
+
+                let flags = FileFlags::rdwr();
+                let mode = FileMode::default_file();
+                let runtime_config = HyperFileRuntimeConfig::default();
+                let default_meta_config = HyperFileMetaConfig::default();
+                let meta_config = HyperFileMetaConfig::new(default_meta_config.root_size,
+                    meta_block_size, data_block_size, BlockPtrFormat::MicroGroup,
+                );
+                let mut hyper = Hyper::fs_create_opt(&client, dev_path, flags, mode, &meta_config, &runtime_config).await.expect("failed to create replica hyper file");
+                let _ = hyper.fs_truncate(dev_size as usize).await.expect("failed to extend size of replica hyper file");
+                let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
+                (hyper, stat)
+            });
+            let (tx, rx) = oneshot::channel();
+            spawner.spawn(hyper, tx);
+            let fh = smol::block_on(async {
+                rt.block_on(async {
+                    rx.await.expect("failed to get back file handler")
+                })
+            });
+            return Self {
+                device_path: dev_path.to_string(),
+                rt: rt,
+                spawner: spawner,
+                handler: fh,
+                stat: stat,
+                state: ReplicaState::new(),
+            };
+        }
+        panic!("invalid input device path {dev_path} for s3 replica");
+    }
+
+    async fn open(dev_path: &str) -> Self {
         let path = dev_path.to_string();
-        smol::unblock(move || Self::init(&path)).await
+        smol::unblock(move || Self::do_open(&path)).await
+    }
+
+    fn set_state_opened(&self) {
+        self.state.set_opened();
     }
 
     async fn dup(&self) -> Self {
@@ -165,10 +217,6 @@ impl<'a: 'static> Replica for S3Replica<'a> {
             stat: self.stat.clone(),
             state: self.state.clone(),
         }
-    }
-
-    fn open(&self) {
-        self.state.set_opened();
     }
 
     #[inline]
@@ -297,5 +345,15 @@ impl<'a: 'static> Replica for S3Replica<'a> {
 
     fn is_active(&self) -> bool {
         self.state.is_active()
+    }
+
+    fn uuid(&self) -> u128 {
+        if let Some((_, uuid_str)) = self.device_path.rsplit_once('/') {
+            if let Ok(uuid) = uuid::Uuid::parse_str(uuid_str) {
+                return uuid.as_u128();
+            }
+        };
+
+        0
     }
 }

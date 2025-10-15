@@ -5,15 +5,19 @@ use crate::replica::{Replica, PendingIo};
 pub struct BlankReplica {}
 
 impl Replica for BlankReplica {
-    async fn new(_dev_path: &str) -> Self {
+    async fn create(_dev_path: &str, _dev_size: u64, _param1: usize, _param2: usize) -> Self {
         Self {}
     }
 
-    async fn dup(&self) -> Self {
+    async fn open(_dev_path: &str) -> Self {
+        Self {}
+    }
+
+    fn set_state_opened(&self) {
         todo!();
     }
 
-    fn open(&self) {
+    async fn dup(&self) -> Self {
         todo!();
     }
 
@@ -50,6 +54,10 @@ impl Replica for BlankReplica {
     }
 
     fn is_active(&self) -> bool {
+        todo!();
+    }
+
+    fn uuid(&self) -> u128 {
         todo!();
     }
 }
