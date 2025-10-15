@@ -28,6 +28,12 @@ mod mgmt_client;
 mod task;
 mod seq;
 
+use crate::replica::{Replica, file::FileReplica};
+#[cfg(feature="blocking")]
+use crate::replica::s3::S3Replica;
+#[cfg(feature="reactor")]
+use crate::replica::s3_reactor::S3Replica;
+
 const MIN_REGION_SIZE: u64 = 8_388_608; // 8MiB
 const MIN_REGION_SHIFT: u32 = 23;
 
@@ -46,6 +52,18 @@ struct Cli {
     /// region size
     #[clap(long, default_value = "8MiB")]
     pub region_size: String,
+
+    /// root uri of replica device
+    #[clap(long)]
+    pub replica: Option<String>,
+
+    /// meta block size if replica is on S3 and use Hyperfile format
+    #[clap(long, default_value_t = 4096)]
+    pub meta_block_size: usize,
+
+    /// data block size if replica is on S3 and use Hyperfile format
+    #[clap(long, default_value_t = 4096)]
+    pub data_block_size: usize,
 }
 
 fn main() {
@@ -96,8 +114,53 @@ fn main() {
         device::MetaDevice::format(&meta_dev_desc, pri_dev.tgt_device_size, &uuid.as_bytes()).await.map(|_| uuid)
     });
 
+    let uuid = match res {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            println!("io-replica format failed, primary device err: {}", e);
+            return;
+        },
+    };
+
+    let Some(input_replica_uri) = cli.replica else {
+        println!("io-replica format success, device uuid: {:?}", uuid);
+        return;
+    };
+
+    // create replica device
+    let res = smol::block_on(async {
+        let meta_block_size = cli.meta_block_size;
+        let data_block_size = cli.data_block_size;
+        let checked_replica_uri = if input_replica_uri.starts_with("s3://") || input_replica_uri.starts_with("S3://") {
+            // check input meta block size
+            if meta_block_size % 4096 != 0 || meta_block_size / 4096 == 0 {
+                println!("io-replica format failed, input meta_block_size {meta_block_size} is not a multiple of 4096");
+                return Err(anyhow::anyhow!("input data_block_size {meta_block_size} is not a multiple of 4096"));
+            };
+
+            // check input data block size
+            if data_block_size % 4096 != 0 || data_block_size / 4096 == 1 {
+                println!("io-replica format failed, input data_block_size {data_block_size} is not a multiple of 4096");
+                return Err(anyhow::anyhow!("input data_block_size {data_block_size} is not a multiple of 4096"));
+            };
+
+            // remove tailing '/'
+            let replica_root_uri = input_replica_uri.trim_end_matches('/');
+            let replica_uri = format!("{}/{:?}", replica_root_uri, uuid);
+            S3Replica::create(&replica_uri, pri_dev.tgt_device_size, meta_block_size, data_block_size).await;
+            replica_uri
+        } else {
+            // remove tailing '/'
+            let replica_root_uri = input_replica_uri.trim_end_matches('/');
+            let replica_uri = format!("{}/{:?}", replica_root_uri, uuid);
+            FileReplica::create(&replica_uri, pri_dev.tgt_device_size, meta_block_size, data_block_size).await;
+            replica_uri
+        };
+        Ok(checked_replica_uri)
+    });
+
     match res {
-        Ok(uuid) => println!("io-replica format success, device uuid: {:?}", uuid),
-        Err(e) => println!("io-replica format failed, err: {}", e),
+        Ok(replica_uri) => println!("io-replica format success, device uuid: {:?}, replica_uri: {}", uuid, replica_uri),
+        Err(e) => println!("io-replica format partial success, device uuid: {:?}, format replica failed {}", uuid, e),
     }
 }
