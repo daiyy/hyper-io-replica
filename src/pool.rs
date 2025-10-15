@@ -505,7 +505,7 @@ impl<T> TgtPendingBlocksPool<T> {
         info!("  - replica path {}", pool.borrow().replica_path);
         let rx = pool.borrow().rx.clone();
         let replica_device = pool.borrow().replica_device.dup().await;
-        replica_device.open();
+        replica_device.set_state_opened();
         task_state.set_start(TaskId::Pool);
         while let Ok(v) = smol::future::or(rx.recv(), Self::idle()).await
         {

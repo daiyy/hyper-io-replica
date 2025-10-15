@@ -816,21 +816,29 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
     });
 
     // init replica device and check it's size
-    let (s3_replica_device, file_replica_device, replica_device_size, replica_cno) = smol::block_on(async {
+    let (s3_replica_device, file_replica_device, replica_device_size, replica_cno, replica_uuid) = smol::block_on(async {
         if replica.starts_with("s3://") || replica.starts_with("S3://") {
-            let device = S3Replica::new(&replica).await;
+            let device = S3Replica::open(&replica).await;
             let sz = device.size();
             // get last cno from replica
             let cno = device.last_cno().await;
-            return (Some(device), None, sz, cno);
+            let uuid = device.uuid();
+            return (Some(device), None, sz, cno, uuid);
         } else {
-            let device = FileReplica::new(&replica).await;
+            let device = FileReplica::open(&replica).await;
             let sz = device.size();
             // get last cno from replica
             let cno = device.last_cno().await;
-            return (None, Some(device), sz, cno);
+            let uuid = device.uuid();
+            return (None, Some(device), sz, cno, uuid);
         };
     });
+
+    // check primary and replica uuid
+    if uuid::Uuid::from_u128(replica_uuid) != uuid::Uuid::parse_str(&uuid).expect("Invalid user input dev UUID") {
+        warn!("Primary and Replica UUID mismatch");
+        return Err(anyhow::anyhow!("Primary and Replica UUID mismatch"));
+    }
 
     // device boot check
     if replica_device_size < raw_device_sz {
