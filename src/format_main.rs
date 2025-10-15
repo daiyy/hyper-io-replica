@@ -139,7 +139,7 @@ fn main() {
             };
 
             // check input data block size
-            if data_block_size % 4096 != 0 || data_block_size / 4096 == 1 {
+            if data_block_size % 4096 != 0 || data_block_size / 4096 == 0 {
                 println!("io-replica format failed, input data_block_size {data_block_size} is not a multiple of 4096");
                 return Err(anyhow::anyhow!("input data_block_size {data_block_size} is not a multiple of 4096"));
             };
