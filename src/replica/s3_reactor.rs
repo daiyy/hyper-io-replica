@@ -153,7 +153,7 @@ impl<'a: 'static> S3Replica<'a> {
 }
 
 impl<'a: 'static> Replica for S3Replica<'a> {
-    async fn create(dev_path: &str, _dev_size: u64, meta_block_size: usize, data_block_size: usize) -> Self {
+    async fn create(dev_path: &str, meta_block_size: usize, data_block_size: usize) -> Self {
         if let Ok(s3uri) = S3Uri::parse(dev_path) {
             // a tokio mt runtime, the place spawn_read/spawn_write of hyperfile task will run
             let rt = Arc::new(

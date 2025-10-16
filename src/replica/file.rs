@@ -9,7 +9,7 @@ pub struct FileReplica {
 }
 
 impl Replica for FileReplica {
-    async fn create(_dev_path: &str, _dev_size: u64, _param1: usize, _param2: usize) -> Self {
+    async fn create(_dev_path: &str, _param1: usize, _param2: usize) -> Self {
         todo!();
     }
 

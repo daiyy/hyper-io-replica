@@ -5,7 +5,7 @@ use crate::replica::{Replica, PendingIo};
 pub struct BlankReplica {}
 
 impl Replica for BlankReplica {
-    async fn create(_dev_path: &str, _dev_size: u64, _param1: usize, _param2: usize) -> Self {
+    async fn create(_dev_path: &str, _param1: usize, _param2: usize) -> Self {
         Self {}
     }
 

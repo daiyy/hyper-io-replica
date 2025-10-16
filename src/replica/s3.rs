@@ -49,7 +49,7 @@ impl<'a: 'static> S3Replica<'a> {
 }
 
 impl<'a: 'static> Replica for S3Replica<'a> {
-    async fn create(dev_path: &str, _dev_size: u64, meta_block_size: usize, data_block_size: usize) -> Self {
+    async fn create(dev_path: &str, meta_block_size: usize, data_block_size: usize) -> Self {
         let rt = Arc::new(runtime::Runtime::new().unwrap());
         if let Ok(s3uri) = S3Uri::parse(dev_path) {
             let (hyper, stat) = rt.block_on(async {

@@ -147,13 +147,13 @@ fn main() {
             // remove tailing '/'
             let replica_root_uri = input_replica_uri.trim_end_matches('/');
             let replica_uri = format!("{}/{:?}", replica_root_uri, uuid);
-            S3Replica::create(&replica_uri, pri_dev.tgt_device_size, meta_block_size, data_block_size).await;
+            S3Replica::create(&replica_uri, meta_block_size, data_block_size).await;
             replica_uri
         } else {
             // remove tailing '/'
             let replica_root_uri = input_replica_uri.trim_end_matches('/');
             let replica_uri = format!("{}/{:?}", replica_root_uri, uuid);
-            FileReplica::create(&replica_uri, pri_dev.tgt_device_size, meta_block_size, data_block_size).await;
+            FileReplica::create(&replica_uri, meta_block_size, data_block_size).await;
             replica_uri
         };
         Ok(checked_replica_uri)

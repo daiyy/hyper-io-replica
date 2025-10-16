@@ -93,7 +93,7 @@ impl ReplicaState {
 
 pub trait Replica: Sized + Send {
     #[allow(dead_code)]
-    fn create(dev_path: &str, tgt_dev_size: u64, param1: usize, param2: usize) -> impl std::future::Future<Output = Self>;
+    fn create(dev_path: &str, param1: usize, param2: usize) -> impl std::future::Future<Output = Self>;
     fn open(dev_path: &str) -> impl std::future::Future<Output = Self>;
     fn set_state_opened(&self);
     fn dup(&self) -> impl std::future::Future<Output = Self>;
