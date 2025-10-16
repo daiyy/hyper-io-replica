@@ -153,7 +153,7 @@ impl<'a: 'static> S3Replica<'a> {
 }
 
 impl<'a: 'static> Replica for S3Replica<'a> {
-    async fn create(dev_path: &str, dev_size: u64, meta_block_size: usize, data_block_size: usize) -> Self {
+    async fn create(dev_path: &str, _dev_size: u64, meta_block_size: usize, data_block_size: usize) -> Self {
         if let Ok(s3uri) = S3Uri::parse(dev_path) {
             // a tokio mt runtime, the place spawn_read/spawn_write of hyperfile task will run
             let rt = Arc::new(
@@ -175,8 +175,7 @@ impl<'a: 'static> Replica for S3Replica<'a> {
                 let meta_config = HyperFileMetaConfig::new(default_meta_config.root_size,
                     meta_block_size, data_block_size, BlockPtrFormat::MicroGroup,
                 );
-                let mut hyper = Hyper::fs_create_opt(&client, dev_path, flags, mode, &meta_config, &runtime_config).await.expect("failed to create replica hyper file");
-                let _ = hyper.fs_truncate(dev_size as usize).await.expect("failed to extend size of replica hyper file");
+                let hyper = Hyper::fs_create_opt(&client, dev_path, flags, mode, &meta_config, &runtime_config).await.expect("failed to create replica hyper file");
                 let stat = hyper.fs_getattr().expect("unable to get hyper file stat");
                 (hyper, stat)
             });
