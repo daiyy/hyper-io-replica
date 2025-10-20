@@ -2,6 +2,12 @@
 name = "hyper-io-replica"
 version = "0.2.0"
 edition = "2021"
+description = "Asynchronous IO replicator for block device"
+authors = ["Dai Yiyang <daiyiyang@hotmail.com>"]
+license = "GPL-2.0-or-later"
+keywords = ["asynchronous", "block device", "storage", "userspace", "replication"]
+homepage = "https://github.com/daiyy/hyper-io-replica"
+repository = "https://github.com/daiyy/hyper-io-replica"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
