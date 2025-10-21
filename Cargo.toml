@@ -1,6 +1,6 @@
 [package]
 name = "hyper-io-replica"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Asynchronous IO replicator for block device"
 authors = ["Dai Yiyang <daiyiyang@hotmail.com>"]
