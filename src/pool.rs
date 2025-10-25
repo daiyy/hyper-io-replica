@@ -251,7 +251,7 @@ impl<T> TgtPendingBlocksPool<T> {
             max_capacity: max_capacity,
             replica_path: replica_path.to_string(),
             replica_device: replica_device,
-            meta_dev: RefCell::new(meta_dev),
+            meta_dev: Mutex::new(meta_dev),
             dev_id,
             g_seq,
             l_seq: 1,
