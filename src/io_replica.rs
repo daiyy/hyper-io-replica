@@ -552,8 +552,14 @@ fn new_q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) -> Result<(), UblkError> {
 
             // Submit initial prep command
             match q.submit_io_prep_cmd(tag, buf_desc.clone(), 0, buf.as_ref()).await {
-                Err(UblkError::QueueIsDown) | Ok(_) => {}
-                Err(e) => log::error!("handle_queue_tag_async failed for tag {}: {}", tag, e),
+                Ok(_) => {},
+                Err(UblkError::QueueIsDown) => {
+                    return;
+                },
+                Err(e) => {
+                    log::error!("queue loop failed for qid: {} tag: {} err: {}", qid, tag, e);
+                    return;
+                },
             }
 
             loop {
@@ -567,8 +573,14 @@ fn new_q_fn(qid: u16, dev: &UblkDev, g_seq: IncrSeq) -> Result<(), UblkError> {
                     *inflight -= 1;
                 }
                 match q.submit_io_commit_cmd(tag, buf_desc.clone(), res).await {
-                    Err(UblkError::QueueIsDown) | Ok(_) => {}
-                    Err(e) => log::error!("handle_queue_tag_async failed for tag {}: {}", tag, e),
+                    Ok(_) => {},
+                    Err(UblkError::QueueIsDown) => {
+                        return;
+                    },
+                    Err(e) => {
+                        log::error!("queue loop failed for qid: {} tag: {} err: {}", qid, tag, e);
+                        return;
+                    },
                 }
             }
         }));
