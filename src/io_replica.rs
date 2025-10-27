@@ -853,9 +853,8 @@ pub(crate) fn ublk_add_io_replica(ctrl: UblkCtrl, opt: Option<IoReplicaArgs>, co
     }
 
     // device boot check
-    if replica_device_size < raw_device_sz {
-        info!("replica device do NOT have enough space, raw device size need {}, actually replica device size {}",
-            raw_device_sz, replica_device_size);
+    if replica_device_size != device_sz {
+        warn!("{}/{} device size/raw device size, actually replica device size {}", device_sz, raw_device_sz, replica_device_size);
     }
 
     // Startup consistency check
